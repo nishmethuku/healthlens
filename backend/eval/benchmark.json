@@ -1,0 +1,552 @@
+[
+  {
+    "question": "What is the evidence for SGLT2 inhibitors in heart failure with reduced ejection fraction?",
+    "ground_truth_pmids": [
+      "41795720",
+      "41953528",
+      "41858299",
+      "41901180",
+      "42211456"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "How effective is direct oral anticoagulation compared to warfarin in atrial fibrillation?",
+    "ground_truth_pmids": [
+      "41461398",
+      "42187550",
+      "41457217",
+      "41378598",
+      "42136139"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "What are outcomes of transcatheter aortic valve replacement in elderly patients?",
+    "ground_truth_pmids": [
+      "42104596",
+      "41765733",
+      "41765256",
+      "41640557",
+      "41364435"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "Does cardiac rehabilitation improve mortality after myocardial infarction?",
+    "ground_truth_pmids": [
+      "41958373",
+      "41515126",
+      "42050442",
+      "41321958",
+      "41370751"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "What is the role of PCSK9 inhibitors in familial hypercholesterolemia?",
+    "ground_truth_pmids": [
+      "41261814",
+      "41398288",
+      "42140727",
+      "41801895",
+      "41782248"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "How is hypertrophic cardiomyopathy managed to prevent sudden cardiac death?",
+    "ground_truth_pmids": [
+      "41313109",
+      "41993018",
+      "41802491",
+      "42054027",
+      "41326920"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "What are benefits of left atrial appendage occlusion for stroke prevention in AF?",
+    "ground_truth_pmids": [
+      "42195143",
+      "41314536",
+      "42148709",
+      "41849741",
+      "42195223"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "Does intensive blood pressure lowering reduce cardiovascular events in hypertension?",
+    "ground_truth_pmids": [
+      "41879425",
+      "41925078",
+      "41902459",
+      "42090672",
+      "41909085"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "What is the prognosis of pulmonary arterial hypertension with modern therapies?",
+    "ground_truth_pmids": [
+      "41291378",
+      "41828555",
+      "41865030",
+      "42135040",
+      "41305691"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "How do statins reduce risk in patients with coronary artery disease?",
+    "ground_truth_pmids": [
+      "41314761",
+      "41423223",
+      "41812721",
+      "29858795",
+      "34562277"
+    ],
+    "topic": "cardiology"
+  },
+  {
+    "question": "What is the efficacy of immune checkpoint inhibitors in metastatic melanoma?",
+    "ground_truth_pmids": [
+      "41938517",
+      "42084869",
+      "42140743",
+      "42004970",
+      "42079639"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "How does HER2-targeted therapy improve outcomes in breast cancer?",
+    "ground_truth_pmids": [
+      "42003708",
+      "42017338",
+      "41934719",
+      "42196512",
+      "42097893"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "What are screening recommendations for colorectal cancer detection?",
+    "ground_truth_pmids": [
+      "42132088",
+      "42127425",
+      "42192637",
+      "41991606",
+      "42026960"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "Does immunotherapy improve survival in non-small cell lung cancer?",
+    "ground_truth_pmids": [
+      "41989053",
+      "41967103",
+      "42011021",
+      "42206044",
+      "42054823"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "What is the role of PARP inhibitors in BRCA-mutated ovarian cancer?",
+    "ground_truth_pmids": [
+      "42148103",
+      "42195253",
+      "42169627",
+      "42125218",
+      "42123545"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "How effective is CAR-T cell therapy for relapsed B-cell lymphoma?",
+    "ground_truth_pmids": [
+      "41963752",
+      "42023243",
+      "42144261",
+      "42099636",
+      "41993181"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "What are risk factors and prevention strategies for hepatocellular carcinoma?",
+    "ground_truth_pmids": [
+      "42196623",
+      "41201177",
+      "31781645",
+      "39568177",
+      "41468607"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "Does adjuvant chemotherapy benefit early-stage pancreatic cancer?",
+    "ground_truth_pmids": [
+      "42029608",
+      "42054617",
+      "42095609",
+      "42126786",
+      "41992406"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "What is the impact of tumor mutational burden on immunotherapy response?",
+    "ground_truth_pmids": [
+      "42151090",
+      "42195047",
+      "42167838",
+      "42167847",
+      "42143164"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "How is prostate cancer managed with androgen deprivation therapy?",
+    "ground_truth_pmids": [
+      "41969015",
+      "42129992",
+      "41973209",
+      "42014146",
+      "41958510"
+    ],
+    "topic": "oncology"
+  },
+  {
+    "question": "What biomarkers predict Alzheimer's disease progression?",
+    "ground_truth_pmids": [
+      "41864233",
+      "42054329",
+      "42128684",
+      "42054026",
+      "41910973"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "How effective are levodopa therapies for Parkinson's disease motor symptoms?",
+    "ground_truth_pmids": [
+      "41860544",
+      "41902693",
+      "42152412",
+      "42205153",
+      "42175483"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "What is the evidence for disease-modifying therapy in multiple sclerosis?",
+    "ground_truth_pmids": [
+      "41902458",
+      "41875462",
+      "41918730",
+      "42133416",
+      "41967760"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "How is acute ischemic stroke treated with endovascular thrombectomy?",
+    "ground_truth_pmids": [
+      "32009581",
+      "41453121",
+      "41864127",
+      "41822970",
+      "41288486"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "What are genetic causes of amyotrophic lateral sclerosis?",
+    "ground_truth_pmids": [
+      "42021677",
+      "41931746",
+      "41877227",
+      "41917768",
+      "41987036"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "Does epilepsy surgery improve outcomes in drug-resistant focal epilepsy?",
+    "ground_truth_pmids": [
+      "42001547",
+      "41936310",
+      "41932780",
+      "30032093",
+      "41347674"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "What is the pathophysiology of migraine with aura?",
+    "ground_truth_pmids": [
+      "42082905",
+      "42197013",
+      "41902388",
+      "41952073",
+      "42106656"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "How is Guillain-Barr\u00e9 syndrome diagnosed and treated?",
+    "ground_truth_pmids": [
+      "42143401",
+      "42115108",
+      "42117563",
+      "42081897",
+      "41910620"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "What cognitive therapies help mild cognitive impairment?",
+    "ground_truth_pmids": [
+      "42054337",
+      "42054331",
+      "41960405",
+      "41871563",
+      "41951190"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "What are outcomes of thalamic deep brain stimulation for essential tremor?",
+    "ground_truth_pmids": [
+      "41955883",
+      "41974545",
+      "42013882",
+      "41908734",
+      "41955137"
+    ],
+    "topic": "neurology"
+  },
+  {
+    "question": "How does semaglutide compare to other GLP-1 agonists for type 2 diabetes?",
+    "ground_truth_pmids": [
+      "41765029",
+      "41636679",
+      "41335431",
+      "41204243",
+      "41678180"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "What is the benefit of continuous glucose monitoring in type 1 diabetes?",
+    "ground_truth_pmids": [
+      "41365423",
+      "41813433",
+      "41462455",
+      "42076661",
+      "41506736"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "Does intensive glycemic control reduce microvascular complications?",
+    "ground_truth_pmids": [
+      "41504525",
+      "41506736",
+      "41218056",
+      "41454302",
+      "41350910"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "What is the role of SGLT2 inhibitors in diabetic kidney disease?",
+    "ground_truth_pmids": [
+      "41792063",
+      "42003157",
+      "41630253",
+      "41376268",
+      "41679482"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "How effective is metformin as first-line therapy for type 2 diabetes?",
+    "ground_truth_pmids": [
+      "41649758",
+      "41539691",
+      "42009383",
+      "41925338",
+      "41360342"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "What lifestyle interventions prevent progression from prediabetes to diabetes?",
+    "ground_truth_pmids": [
+      "42162482",
+      "41344900",
+      "41397402",
+      "41349037",
+      "41805646"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "How is diabetic foot ulcer managed to prevent amputation?",
+    "ground_truth_pmids": [
+      "41217802",
+      "41167787",
+      "41249888",
+      "41537696",
+      "41474598"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "What are cardiovascular outcomes with insulin pump therapy?",
+    "ground_truth_pmids": [
+      "41365423",
+      "42162476",
+      "41307692",
+      "41697686",
+      "41378654"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "Does bariatric surgery induce remission of type 2 diabetes?",
+    "ground_truth_pmids": [
+      "41172445",
+      "41417301",
+      "41348144",
+      "41224249",
+      "41314989"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "What is the epidemiology of gestational diabetes and maternal outcomes?",
+    "ground_truth_pmids": [
+      "42117518",
+      "41486944",
+      "41455101",
+      "41431818",
+      "41856579"
+    ],
+    "topic": "diabetes"
+  },
+  {
+    "question": "How effective are SSRIs compared to placebo for major depressive disorder?",
+    "ground_truth_pmids": [
+      "41795948",
+      "42036580",
+      "41765199",
+      "42036582",
+      "42107656"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "What is the evidence for cognitive behavioral therapy in generalized anxiety disorder?",
+    "ground_truth_pmids": [
+      "42166624",
+      "41881119",
+      "41864347",
+      "42190644",
+      "42166752"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "Do antipsychotics improve outcomes in first-episode schizophrenia?",
+    "ground_truth_pmids": [
+      "41742220",
+      "41683775",
+      "41966435",
+      "41865718",
+      "42084439"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "What are treatments for post-traumatic stress disorder in veterans?",
+    "ground_truth_pmids": [
+      "41865761",
+      "42189044",
+      "42115982",
+      "41680903",
+      "41759354"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "How is attention-deficit hyperactivity disorder managed in adults?",
+    "ground_truth_pmids": [
+      "42134365",
+      "41947282",
+      "41764167",
+      "41885542",
+      "41906356"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "What pharmacotherapy helps bipolar disorder prevent relapse?",
+    "ground_truth_pmids": [
+      "41996700",
+      "41893848",
+      "42159376",
+      "41894260",
+      "41921879"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "Does ketamine therapy reduce treatment-resistant depression symptoms?",
+    "ground_truth_pmids": [
+      "41919730",
+      "42059646",
+      "42127940",
+      "41990095",
+      "42019344"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "What interventions reduce suicide risk in adolescents?",
+    "ground_truth_pmids": [
+      "41818636",
+      "41768591",
+      "42071839",
+      "42201946",
+      "41895612"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "How effective is exposure therapy for obsessive-compulsive disorder?",
+    "ground_truth_pmids": [
+      "41806009",
+      "41878756",
+      "42178423",
+      "41998696",
+      "41702287"
+    ],
+    "topic": "mental_health"
+  },
+  {
+    "question": "What is the role of digital mental health apps for anxiety disorders?",
+    "ground_truth_pmids": [
+      "41804090",
+      "41877492",
+      "41719540",
+      "41802227",
+      "42101171"
+    ],
+    "topic": "mental_health"
+  }
+]

@@ -1,0 +1,7 @@
+backend/venv/
+backend/__pycache__/
+backend/data/pubmed_abstracts.jsonl
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+*.pyc
