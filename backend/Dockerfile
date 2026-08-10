@@ -25,10 +25,14 @@ COPY . .
 
 # Bake the embedding + reranker weights into the image so the container never
 # needs Hub access at runtime (faster cold start, works in network-locked prod).
+# Read model ids from config.py instead of hardcoding them here, so a model
+# swap in one place can't silently drift between dev and the built image.
 RUN python -c "\
+from config import get_settings; \
 from sentence_transformers import SentenceTransformer, CrossEncoder; \
-SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
-CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')" \
+s = get_settings(); \
+SentenceTransformer(s.embedding_model_id); \
+CrossEncoder(s.reranker_model_id)" \
     && chown -R appuser:appuser /opt/hf-cache /app
 
 ENV HF_HUB_OFFLINE=1 \

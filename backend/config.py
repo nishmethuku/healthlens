@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     embedding_model_id: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2", alias="EMBEDDING_MODEL_ID"
+        default="NeuML/pubmedbert-base-embeddings", alias="EMBEDDING_MODEL_ID"
     )
     reranker_model_id: str = Field(
         default="cross-encoder/ms-marco-MiniLM-L-6-v2", alias="RERANKER_MODEL_ID"
