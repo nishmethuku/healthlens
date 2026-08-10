@@ -19,8 +19,8 @@ import os
 import sys
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Callable, Iterator
 
 import httpx
 from dotenv import load_dotenv

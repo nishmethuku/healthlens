@@ -7,4 +7,6 @@ faiss-cpu
 rank-bm25
 httpx
 pydantic
+pydantic-settings
+slowapi
 tqdm

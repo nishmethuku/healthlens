@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.env.local
+
+# The corpus + derived index cache are large and environment-specific — mount
+# them as a volume at runtime instead of baking into the image.
+data/pubmed_abstracts.jsonl
+data/index_cache/
+
+eval/results*.json

@@ -1,6 +1,19 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 
-const API_URL = "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+
+interface Source {
+  title: string;
+  pmid: string;
+}
+
+interface QueryResponse {
+  answer: string | null;
+  sources: Source[];
+  flagged: boolean;
+  warning: string | null;
+  detail?: string;
+}
 
 function Background() {
   const particles = useMemo(
@@ -114,13 +127,13 @@ function LogoMark() {
 export default function App() {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
-  const [answer, setAnswer] = useState(null);
-  const [sources, setSources] = useState([]);
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [sources, setSources] = useState<Source[]>([]);
   const [flagged, setFlagged] = useState(false);
-  const [warning, setWarning] = useState(null);
-  const [error, setError] = useState(null);
+  const [warning, setWarning] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(e) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const q = question.trim();
     if (!q || loading) return;
@@ -133,13 +146,13 @@ export default function App() {
     setError(null);
 
     try {
-      const res = await fetch(`${API_URL}/query`, {
+      const res = await fetch(`${API_URL}/api/v1/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q }),
       });
 
-      const data = await res.json();
+      const data: QueryResponse = await res.json();
 
       if (!res.ok) {
         throw new Error(data.detail || "Request failed");
@@ -153,7 +166,8 @@ export default function App() {
         setSources(data.sources || []);
       }
     } catch (err) {
-      setError(err.message || "Something went wrong. Is the backend running?");
+      const message = err instanceof Error ? err.message : "Something went wrong. Is the backend running?";
+      setError(message);
     } finally {
       setLoading(false);
     }

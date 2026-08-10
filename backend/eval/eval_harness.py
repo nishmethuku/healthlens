@@ -40,14 +40,14 @@ def _ensure_backend_venv() -> None:
         )
 
 from ingest import Abstract
-from retrieval import CorpusIndex
+from retrieval import INDEX_CACHE_DIR, CorpusIndex
 
 EVAL_DIR = Path(__file__).resolve().parent
 DEFAULT_BENCHMARK = EVAL_DIR / "benchmark.json"
 DEFAULT_CORPUS = BACKEND_DIR / "data" / "pubmed_abstracts.jsonl"
 DEFAULT_RESULTS = EVAL_DIR / "results.json"
 
-MODES = ("bm25", "dense", "hybrid")
+MODES = ("bm25", "dense", "hybrid", "hybrid_rerank")
 TOP_K = 5
 
 
@@ -107,7 +107,10 @@ def evaluate_mode(
     for item in benchmark:
         question = item["question"]
         relevant = {str(p) for p in item["ground_truth_pmids"]}
-        results = corpus_index.retrieve(question, top_k=TOP_K, mode=mode)
+        if mode == "hybrid_rerank":
+            results = corpus_index.retrieve(question, top_k=TOP_K, mode="hybrid", rerank=True)
+        else:
+            results = corpus_index.retrieve(question, top_k=TOP_K, mode=mode)
         retrieved = [r["pmid"] for r in results]
 
         recalls.append(recall_at_k(relevant, retrieved, TOP_K))
@@ -157,7 +160,7 @@ def main() -> None:
     print(f"Indexed {len(abstracts)} abstracts\n")
 
     print("Building retrieval index (BM25 + dense embeddings) ...")
-    corpus_index = CorpusIndex(abstracts)
+    corpus_index = CorpusIndex(abstracts, cache_dir=INDEX_CACHE_DIR)
 
     results: dict[str, dict[str, float]] = {}
     for mode in MODES:

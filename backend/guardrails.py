@@ -1,5 +1,4 @@
 import re
-from typing import Tuple
 
 UNSAFE_PATTERNS = [
     r"\bkill\s+myself\b",
@@ -21,7 +20,7 @@ UNSAFE_PATTERNS = [
 _compiled = [re.compile(p, re.IGNORECASE) for p in UNSAFE_PATTERNS]
 
 
-def check_query(query: str) -> Tuple[bool, str | None]:
+def check_query(query: str) -> tuple[bool, str | None]:
     """Return (flagged, reason). flagged=True if query matches unsafe patterns."""
     text = query.strip()
     if not text:
