@@ -10,12 +10,62 @@ interface Source {
   pmid: string;
 }
 
-interface QueryResponse {
-  answer: string | null;
-  sources: Source[];
-  flagged: boolean;
-  warning: string | null;
-  detail?: string;
+interface StreamHandlers {
+  onSources: (sources: Source[]) => void;
+  onToken: (text: string) => void;
+  onFlagged: (warning: string | null) => void;
+  onError: (detail: string) => void;
+  onDone: () => void;
+}
+
+// Native EventSource can't do POST + custom headers, so SSE is parsed by hand
+// from a fetch() ReadableStream. Events are "event: X\ndata: Y\n\n" blocks;
+// data chunks can split across reads, so unparsed text is buffered between
+// reader.read() calls until a full "\n\n"-terminated event is available.
+async function consumeSSE(res: Response, handlers: StreamHandlers) {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("Streaming is not supported in this browser.");
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sepIndex: number;
+    while ((sepIndex = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sepIndex);
+      buffer = buffer.slice(sepIndex + 2);
+
+      let eventType = "message";
+      let data = "";
+      for (const line of rawEvent.split("\n")) {
+        if (line.startsWith("event: ")) eventType = line.slice(7);
+        else if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      if (!data) continue;
+      const parsed = JSON.parse(data);
+
+      switch (eventType) {
+        case "sources":
+          handlers.onSources(parsed.sources ?? []);
+          break;
+        case "token":
+          handlers.onToken(parsed.text ?? "");
+          break;
+        case "flagged":
+          handlers.onFlagged(parsed.warning ?? null);
+          break;
+        case "error":
+          handlers.onError(parsed.detail ?? "Something went wrong.");
+          break;
+        case "done":
+          handlers.onDone();
+          break;
+      }
+    }
+  }
 }
 
 function Background() {
@@ -149,25 +199,32 @@ export default function App() {
     setError(null);
 
     try {
-      const res = await fetch(`${API_URL}/api/v1/query`, {
+      const res = await fetch(`${API_URL}/api/v1/query/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
         body: JSON.stringify({ question: q }),
       });
 
-      const data: QueryResponse = await res.json();
-
       if (!res.ok) {
-        throw new Error(data.detail || "Request failed");
+        let detail = "Request failed";
+        try {
+          detail = (await res.json()).detail ?? detail;
+        } catch {
+          // response body wasn't JSON (e.g. a 401 from a proxy) — keep the default
+        }
+        throw new Error(detail);
       }
 
-      if (data.flagged) {
-        setFlagged(true);
-        setWarning(data.warning);
-      } else {
-        setAnswer(data.answer);
-        setSources(data.sources || []);
-      }
+      await consumeSSE(res, {
+        onSources: (s) => setSources(s),
+        onToken: (text) => setAnswer((prev) => (prev ?? "") + text),
+        onFlagged: (warning) => {
+          setFlagged(true);
+          setWarning(warning);
+        },
+        onError: (detail) => setError(detail),
+        onDone: () => {},
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong. Is the backend running?";
       setError(message);
@@ -176,7 +233,8 @@ export default function App() {
     }
   }
 
-  const hasResults = answer && !loading && !flagged;
+  const hasResults = (answer !== null || sources.length > 0) && !flagged;
+  const showSkeleton = loading && !hasResults && !error;
 
   return (
     <div className="relative min-h-screen text-white">
@@ -242,7 +300,7 @@ export default function App() {
             <span className="text-slate-400">988</span>.
           </p>
 
-          {loading && <LoadingState />}
+          {showSkeleton && <LoadingState />}
 
           {error && !loading && (
             <div className="mt-14 rounded-2xl border border-red-400/20 bg-red-950/30 px-6 py-5 backdrop-blur-sm">
@@ -281,7 +339,16 @@ export default function App() {
                   </span>
                   <div className="h-px flex-1 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
                 </div>
-                <div className="answer-text whitespace-pre-wrap">{answer}</div>
+                <div className="answer-text whitespace-pre-wrap">
+                  {answer}
+                  {loading && (
+                    <span
+                      className="ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 bg-sky-400"
+                      style={{ animation: "pulse-glow 1s ease-in-out infinite" }}
+                      aria-hidden
+                    />
+                  )}
+                </div>
               </article>
 
               {sources.length > 0 && (

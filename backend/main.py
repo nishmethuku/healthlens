@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -7,19 +8,21 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.concurrency import iterate_in_threadpool
 
 from config import get_settings
 from guardrails import check_query
 from ingest import fetch_pubmed_abstracts
-from llm import generate_answer
+from llm import generate_answer, stream_answer
 from logging_config import configure_logging, request_id_var
 from query_decomposition import decomposed_retrieve
 from retrieval import (
+    RankedAbstract,
     get_corpus_index,
     hybrid_retrieve,
     hybrid_retrieve_indexed,
@@ -181,6 +184,22 @@ async def health_ready():
 v1_router = APIRouter(prefix="/api/v1", tags=["query"])
 
 
+async def _retrieve_top(question: str, decompose: bool) -> list[RankedAbstract] | None:
+    """Shared retrieval path for both the JSON and streaming query endpoints.
+    Returns None only for the "no corpus, live fetch found nothing" case."""
+    corpus_index = await asyncio.to_thread(get_corpus_index)
+
+    if corpus_index is not None:
+        if decompose:
+            return await asyncio.to_thread(decomposed_retrieve, question, corpus_index, 5)
+        return await asyncio.to_thread(hybrid_retrieve_indexed, question, 5)
+
+    abstracts = await fetch_pubmed_abstracts(question)
+    if not abstracts:
+        return None
+    return await asyncio.to_thread(hybrid_retrieve, question, abstracts, 5)
+
+
 @v1_router.post(
     "/query",
     response_model=QueryResponse,
@@ -202,24 +221,13 @@ async def query(request: Request, req: QueryRequest):
         return QueryResponse(flagged=True, warning=warning)
 
     try:
-        corpus_index = await asyncio.to_thread(get_corpus_index)
+        top = await _retrieve_top(question, req.decompose)
 
-        if corpus_index is not None:
-            if req.decompose:
-                top = await asyncio.to_thread(
-                    decomposed_retrieve, question, corpus_index, 5
-                )
-            else:
-                top = await asyncio.to_thread(hybrid_retrieve_indexed, question, 5)
-        else:
-            abstracts = await fetch_pubmed_abstracts(question)
-            if not abstracts:
-                return QueryResponse(
-                    answer="No PubMed abstracts were found for this query. Try rephrasing your question.",
-                    sources=[],
-                )
-            top = await asyncio.to_thread(hybrid_retrieve, question, abstracts, 5)
-
+        if top is None:
+            return QueryResponse(
+                answer="No PubMed abstracts were found for this query. Try rephrasing your question.",
+                sources=[],
+            )
         if not top:
             return QueryResponse(
                 answer="No relevant abstracts were found for this query. Try rephrasing your question.",
@@ -244,6 +252,62 @@ async def query(request: Request, req: QueryRequest):
             status_code=500,
             detail="An internal error occurred while processing your question.",
         ) from None
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _stream_query_events(question: str, decompose: bool):
+    """Async SSE event generator. Event types: sources, token, done, flagged, error.
+    Errors are logged with full detail server-side; only a generic message is
+    ever put on the wire, same policy as the non-streaming endpoint."""
+    flagged, warning = check_query(question)
+    if flagged:
+        logger.info("streamed query flagged by guardrails")
+        yield _sse("flagged", {"warning": warning})
+        return
+
+    try:
+        top = await _retrieve_top(question, decompose)
+
+        if not top:
+            yield _sse("error", {"detail": "No relevant abstracts were found for this query."})
+            return
+
+        sources = [{"title": s["title"], "pmid": s["pmid"]} for s in top]
+        yield _sse("sources", {"sources": sources})
+
+        token_iter = iterate_in_threadpool(stream_answer(question, top))
+        async for delta in token_iter:
+            yield _sse("token", {"text": delta})
+
+        yield _sse("done", {})
+
+    except ValueError:
+        logger.exception("service misconfiguration handling streamed query")
+        yield _sse("error", {"detail": "HealthLens is temporarily unavailable. Please try again shortly."})
+    except Exception:
+        logger.exception("unhandled error handling streamed query")
+        yield _sse("error", {"detail": "An internal error occurred while processing your question."})
+
+
+@v1_router.post(
+    "/query/stream",
+    summary="Same as /query, but streams the answer token-by-token via SSE",
+    dependencies=[Depends(verify_api_key)],
+    responses={
+        401: {"description": "Missing or invalid API key"},
+        429: {"description": "Rate limit exceeded"},
+    },
+)
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def query_stream(request: Request, req: QueryRequest):
+    return StreamingResponse(
+        _stream_query_events(req.question, req.decompose),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 app.include_router(live_router)
