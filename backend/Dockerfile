@@ -19,21 +19,24 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    HF_HOME=/opt/hf-cache
+    HF_HOME=/opt/hf-cache \
+    NLTK_DATA=/opt/nltk-data
 
 COPY . .
 
-# Bake the embedding + reranker weights into the image so the container never
-# needs Hub access at runtime (faster cold start, works in network-locked prod).
-# Read model ids from config.py instead of hardcoding them here, so a model
-# swap in one place can't silently drift between dev and the built image.
+# Bake the embedding + reranker weights and the sentence tokenizer data into
+# the image so the container never needs network access at runtime (faster
+# cold start, works in network-locked prod). Read model ids from config.py
+# instead of hardcoding them here, so a model swap in one place can't
+# silently drift between dev and the built image.
 RUN python -c "\
 from config import get_settings; \
 from sentence_transformers import SentenceTransformer, CrossEncoder; \
 s = get_settings(); \
 SentenceTransformer(s.embedding_model_id); \
 CrossEncoder(s.reranker_model_id)" \
-    && chown -R appuser:appuser /opt/hf-cache /app
+    && python -c "import nltk; nltk.download('punkt_tab', download_dir='/opt/nltk-data')" \
+    && chown -R appuser:appuser /opt/hf-cache /opt/nltk-data /app
 
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1

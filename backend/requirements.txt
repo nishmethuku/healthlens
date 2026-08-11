@@ -10,4 +10,5 @@ pydantic
 pydantic-settings
 slowapi
 cachetools
+nltk
 tqdm
