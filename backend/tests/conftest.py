@@ -3,10 +3,20 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+import cache
 import main
 
 TEST_API_KEY = "test-api-key"
 AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+
+
+@pytest.fixture(autouse=True)
+def _clear_query_cache():
+    # The query cache is a module-level singleton, so without this, cache
+    # hits from one test would leak into the next (tests share one process).
+    cache.clear()
+    yield
+    cache.clear()
 
 
 @pytest.fixture

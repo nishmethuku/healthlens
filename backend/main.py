@@ -15,6 +15,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from starlette.concurrency import iterate_in_threadpool
 
+import cache
 from config import get_settings
 from guardrails import check_query
 from ingest import fetch_pubmed_abstracts
@@ -220,6 +221,12 @@ async def query(request: Request, req: QueryRequest):
         logger.info("query flagged by guardrails")
         return QueryResponse(flagged=True, warning=warning)
 
+    cache_key = cache.make_key(question, req.decompose)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.info("query cache hit", extra={"cache_key": cache_key})
+        return cached
+
     try:
         top = await _retrieve_top(question, req.decompose)
 
@@ -236,7 +243,9 @@ async def query(request: Request, req: QueryRequest):
 
         result = await asyncio.to_thread(generate_answer, question, top)
         sources = [Source(title=s["title"], pmid=s["pmid"]) for s in top]
-        return QueryResponse(answer=result["answer"], sources=sources)
+        response = QueryResponse(answer=result["answer"], sources=sources)
+        cache.set(cache_key, response)
+        return response
 
     except ValueError:
         # Missing/invalid API key etc. — a config problem, not a client error.

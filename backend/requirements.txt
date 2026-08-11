@@ -9,4 +9,5 @@ httpx
 pydantic
 pydantic-settings
 slowapi
+cachetools
 tqdm
