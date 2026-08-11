@@ -8,10 +8,12 @@ RUN npm ci
 
 COPY . .
 
-# Vite inlines env vars at build time, so the API URL must be supplied here —
-# not as a runtime container env var. Default matches local docker-compose.
+# Vite inlines env vars at build time, so these must be supplied here — not
+# as runtime container env vars. Defaults match local docker-compose.
 ARG VITE_API_URL=http://localhost:8000
-ENV VITE_API_URL=$VITE_API_URL
+ARG VITE_HEALTHLENS_API_KEY=""
+ENV VITE_API_URL=$VITE_API_URL \
+    VITE_HEALTHLENS_API_KEY=$VITE_HEALTHLENS_API_KEY
 RUN npm run build
 
 # --- runtime: serve the static build with nginx ---

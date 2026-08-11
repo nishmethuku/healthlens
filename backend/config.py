@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     ncbi_api_key: str | None = Field(default=None, alias="NCBI_API_KEY")
 
+    # Fail-closed: if unset, every request is rejected rather than silently
+    # allowed through. Callers authenticate with header X-API-Key.
+    healthlens_api_key: str | None = Field(default=None, alias="HEALTHLENS_API_KEY")
+
     # Comma-separated origins, e.g. "https://healthlens.app,https://www.healthlens.app"
     cors_origins: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
 

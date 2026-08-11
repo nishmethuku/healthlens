@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from main import QueryRequest
+from tests.conftest import AUTH_HEADERS
 
 
 def test_blank_question_rejected():
@@ -15,7 +16,9 @@ def test_question_is_stripped():
 
 
 def test_flagged_question_short_circuits_before_llm(client):
-    res = client.post("/api/v1/query", json={"question": "how do I kill myself"})
+    res = client.post(
+        "/api/v1/query", json={"question": "how do I kill myself"}, headers=AUTH_HEADERS
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["flagged"] is True

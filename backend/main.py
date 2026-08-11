@@ -5,7 +5,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -100,6 +100,21 @@ async def request_context_middleware(request: Request, call_next):
     return response
 
 
+async def verify_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Fail closed: with no configured key, or a missing/wrong header, reject.
+
+    Known limitation: the frontend is a public browser SPA, so any key it
+    sends is baked into the built JS bundle and readable by anyone who opens
+    devtools — it is not a real secret in that context. This gates casual/
+    automated abuse of a cost-bearing LLM endpoint, not a determined attacker
+    with access to the frontend. A proper fix is per-user auth or a
+    backend-for-frontend that holds the real secret server-side.
+    """
+    expected = settings.healthlens_api_key
+    if not expected or x_api_key != expected:
+        raise HTTPException(status_code=401, detail="Missing or invalid API key")
+
+
 class QueryRequest(BaseModel):
     question: str = Field(
         ...,
@@ -170,7 +185,9 @@ v1_router = APIRouter(prefix="/api/v1", tags=["query"])
     "/query",
     response_model=QueryResponse,
     summary="Answer a medical question grounded in PubMed abstracts",
+    dependencies=[Depends(verify_api_key)],
     responses={
+        401: {"description": "Missing or invalid API key"},
         429: {"description": "Rate limit exceeded"},
         503: {"description": "LLM or retrieval backend unavailable"},
     },

@@ -1,6 +1,9 @@
 import { useMemo, useState, type FormEvent } from "react";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+// Baked into the public JS bundle at build time — deters casual abuse only,
+// not a real secret. See frontend/.env.example for the full caveat.
+const API_KEY = import.meta.env.VITE_HEALTHLENS_API_KEY ?? "";
 
 interface Source {
   title: string;
@@ -148,7 +151,7 @@ export default function App() {
     try {
       const res = await fetch(`${API_URL}/api/v1/query`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
         body: JSON.stringify({ question: q }),
       });
 
