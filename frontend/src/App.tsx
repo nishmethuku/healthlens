@@ -11,7 +11,7 @@ interface Source {
 }
 
 interface StreamHandlers {
-  onSources: (sources: Source[]) => void;
+  onSources: (sources: Source[], queryId: string) => void;
   onToken: (text: string) => void;
   onFlagged: (warning: string | null) => void;
   onError: (detail: string) => void;
@@ -49,7 +49,7 @@ async function consumeSSE(res: Response, handlers: StreamHandlers) {
 
       switch (eventType) {
         case "sources":
-          handlers.onSources(parsed.sources ?? []);
+          handlers.onSources(parsed.sources ?? [], parsed.query_id ?? "");
           break;
         case "token":
           handlers.onToken(parsed.text ?? "");
@@ -185,6 +185,8 @@ export default function App() {
   const [flagged, setFlagged] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [queryId, setQueryId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -197,6 +199,8 @@ export default function App() {
     setFlagged(false);
     setWarning(null);
     setError(null);
+    setQueryId(null);
+    setFeedback(null);
 
     try {
       const res = await fetch(`${API_URL}/api/v1/query/stream`, {
@@ -216,7 +220,10 @@ export default function App() {
       }
 
       await consumeSSE(res, {
-        onSources: (s) => setSources(s),
+        onSources: (s, id) => {
+          setSources(s);
+          setQueryId(id);
+        },
         onToken: (text) => setAnswer((prev) => (prev ?? "") + text),
         onFlagged: (warning) => {
           setFlagged(true);
@@ -230,6 +237,24 @@ export default function App() {
       setError(message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function submitFeedback(rating: "up" | "down") {
+    if (!queryId || feedback) return;
+    setFeedback(rating); // optimistic — this is a low-stakes UI signal, not a critical write
+    try {
+      await fetch(`${API_URL}/api/v1/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+        body: JSON.stringify({
+          query_id: queryId,
+          rating,
+          answer_preview: (answer ?? "").slice(0, 500),
+        }),
+      });
+    } catch {
+      // best-effort — don't surface a feedback-submission failure to the user
     }
   }
 
@@ -349,6 +374,49 @@ export default function App() {
                     />
                   )}
                 </div>
+
+                {!loading && queryId && (
+                  <div className="mt-6 flex items-center gap-3 border-t border-white/[0.06] pt-5">
+                    <span className="text-xs text-slate-500">Was this answer helpful?</span>
+                    <button
+                      type="button"
+                      onClick={() => submitFeedback("up")}
+                      disabled={feedback !== null}
+                      aria-pressed={feedback === "up"}
+                      aria-label="This answer was helpful"
+                      className={`rounded-lg border p-1.5 transition-colors ${
+                        feedback === "up"
+                          ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+                          : "border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200"
+                      } disabled:cursor-default`}
+                    >
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M7 22V11" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => submitFeedback("down")}
+                      disabled={feedback !== null}
+                      aria-pressed={feedback === "down"}
+                      aria-label="This answer was not helpful"
+                      className={`rounded-lg border p-1.5 transition-colors ${
+                        feedback === "down"
+                          ? "border-red-400/40 bg-red-400/10 text-red-300"
+                          : "border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200"
+                      } disabled:cursor-default`}
+                    >
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M17 2v11" />
+                      </svg>
+                    </button>
+                    {feedback && (
+                      <span className="text-xs text-slate-500">Thanks for the feedback.</span>
+                    )}
+                  </div>
+                )}
               </article>
 
               {sources.length > 0 && (

@@ -2,6 +2,7 @@ backend/venv/
 backend/__pycache__/
 backend/data/pubmed_abstracts.jsonl
 backend/data/index_cache/
+backend/data/feedback.jsonl
 backend/eval/results_*.json
 backend/.pytest_cache/
 frontend/node_modules/

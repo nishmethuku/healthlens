@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
@@ -16,6 +17,7 @@ from slowapi.util import get_remote_address
 from starlette.concurrency import iterate_in_threadpool
 
 import cache
+import feedback
 from config import get_settings
 from guardrails import check_query
 from ingest import fetch_pubmed_abstracts
@@ -147,10 +149,17 @@ class Source(BaseModel):
 
 
 class QueryResponse(BaseModel):
+    query_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     answer: str | None = None
     sources: list[Source] = []
     flagged: bool = False
     warning: str | None = None
+
+
+class FeedbackRequest(BaseModel):
+    query_id: str
+    rating: Literal["up", "down"]
+    answer_preview: str = Field(..., max_length=2000)
 
 
 live_router = APIRouter(tags=["health"])
@@ -225,7 +234,9 @@ async def query(request: Request, req: QueryRequest):
     cached = cache.get(cache_key)
     if cached is not None:
         logger.info("query cache hit", extra={"cache_key": cache_key})
-        return cached
+        # Fresh query_id per request even on a hit — two different callers
+        # served the same cached text still submit feedback independently.
+        return QueryResponse(answer=cached["answer"], sources=cached["sources"])
 
     try:
         top = await _retrieve_top(question, req.decompose)
@@ -243,9 +254,8 @@ async def query(request: Request, req: QueryRequest):
 
         result = await asyncio.to_thread(generate_answer, question, top)
         sources = [Source(title=s["title"], pmid=s["pmid"]) for s in top]
-        response = QueryResponse(answer=result["answer"], sources=sources)
-        cache.set(cache_key, response)
-        return response
+        cache.set(cache_key, {"answer": result["answer"], "sources": sources})
+        return QueryResponse(answer=result["answer"], sources=sources)
 
     except ValueError:
         # Missing/invalid API key etc. — a config problem, not a client error.
@@ -285,7 +295,7 @@ async def _stream_query_events(question: str, decompose: bool):
             return
 
         sources = [{"title": s["title"], "pmid": s["pmid"]} for s in top]
-        yield _sse("sources", {"sources": sources})
+        yield _sse("sources", {"sources": sources, "query_id": str(uuid.uuid4())})
 
         token_iter = iterate_in_threadpool(stream_answer(question, top))
         async for delta in token_iter:
@@ -299,6 +309,18 @@ async def _stream_query_events(question: str, decompose: bool):
     except Exception:
         logger.exception("unhandled error handling streamed query")
         yield _sse("error", {"detail": "An internal error occurred while processing your question."})
+
+
+@v1_router.post(
+    "/feedback",
+    summary="Record a thumbs up/down rating for a previous answer",
+    dependencies=[Depends(verify_api_key)],
+    responses={401: {"description": "Missing or invalid API key"}},
+)
+async def submit_feedback(req: FeedbackRequest):
+    await asyncio.to_thread(feedback.append, req.query_id, req.rating, req.answer_preview)
+    logger.info("feedback recorded", extra={"query_id": req.query_id, "rating": req.rating})
+    return {"status": "ok"}
 
 
 @v1_router.post(
