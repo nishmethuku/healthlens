@@ -7,9 +7,18 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -18,6 +27,7 @@ from starlette.concurrency import iterate_in_threadpool
 
 import cache
 import feedback
+import metrics
 from config import get_settings
 from guardrails import check_query
 from ingest import fetch_pubmed_abstracts
@@ -31,6 +41,8 @@ from retrieval import (
     hybrid_retrieve_indexed,
     warm_reranker,
 )
+
+RETRIEVAL_TOP_K = 5
 
 load_dotenv()
 settings = get_settings()
@@ -91,7 +103,7 @@ async def request_context_middleware(request: Request, call_next):
         )
         raise
     finally:
-        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        duration_seconds = time.perf_counter() - start
         request_id_var.reset(token)
     logger.info(
         "request handled",
@@ -99,9 +111,13 @@ async def request_context_middleware(request: Request, call_next):
             "path": request.url.path,
             "method": request.method,
             "status_code": response.status_code,
-            "duration_ms": duration_ms,
+            "duration_ms": round(duration_seconds * 1000, 2),
         },
     )
+    metrics.request_latency_seconds.labels(endpoint=request.url.path).observe(duration_seconds)
+    metrics.requests_total.labels(
+        endpoint=request.url.path, status=str(response.status_code)
+    ).inc()
     response.headers["x-request-id"] = req_id
     return response
 
@@ -163,6 +179,14 @@ class FeedbackRequest(BaseModel):
 
 
 live_router = APIRouter(tags=["health"])
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint():
+    """Prometheus scrape target. No auth: standard practice is to keep this
+    off the public internet at the network/ingress layer, not gate it with
+    the same API key used for cost-bearing LLM calls."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @live_router.get("/health/live", summary="Liveness probe")
@@ -234,6 +258,7 @@ async def query(request: Request, req: QueryRequest):
     cached = cache.get(cache_key)
     if cached is not None:
         logger.info("query cache hit", extra={"cache_key": cache_key})
+        metrics.cache_hits_total.inc()
         # Fresh query_id per request even on a hit — two different callers
         # served the same cached text still submit feedback independently.
         return QueryResponse(answer=cached["answer"], sources=cached["sources"])
@@ -246,6 +271,7 @@ async def query(request: Request, req: QueryRequest):
                 answer="No PubMed abstracts were found for this query. Try rephrasing your question.",
                 sources=[],
             )
+        metrics.retrieval_recall_proxy.observe(len(top) / RETRIEVAL_TOP_K)
         if not top:
             return QueryResponse(
                 answer="No relevant abstracts were found for this query. Try rephrasing your question.",
@@ -253,6 +279,7 @@ async def query(request: Request, req: QueryRequest):
             )
 
         result = await asyncio.to_thread(generate_answer, question, top)
+        metrics.record_token_usage(result["prompt_tokens"], result["completion_tokens"])
         sources = [Source(title=s["title"], pmid=s["pmid"]) for s in top]
         cache.set(cache_key, {"answer": result["answer"], "sources": sources})
         return QueryResponse(answer=result["answer"], sources=sources)
@@ -293,14 +320,20 @@ async def _stream_query_events(question: str, decompose: bool):
         if not top:
             yield _sse("error", {"detail": "No relevant abstracts were found for this query."})
             return
+        metrics.retrieval_recall_proxy.observe(len(top) / RETRIEVAL_TOP_K)
 
         sources = [{"title": s["title"], "pmid": s["pmid"]} for s in top]
         yield _sse("sources", {"sources": sources, "query_id": str(uuid.uuid4())})
 
-        token_iter = iterate_in_threadpool(stream_answer(question, top))
+        usage_sink: dict = {}
+        token_iter = iterate_in_threadpool(stream_answer(question, top, usage_sink))
         async for delta in token_iter:
             yield _sse("token", {"text": delta})
 
+        if usage_sink:
+            metrics.record_token_usage(
+                usage_sink.get("prompt_tokens", 0), usage_sink.get("completion_tokens", 0)
+            )
         yield _sse("done", {})
 
     except ValueError:

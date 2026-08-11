@@ -12,7 +12,7 @@ async def _fake_retrieve_top(question, decompose):
 def _fake_generate_answer(call_count):
     def _generate(question, sources):
         call_count["n"] += 1
-        return {"answer": "the answer", "citations": []}
+        return {"answer": "the answer", "citations": [], "prompt_tokens": 10, "completion_tokens": 5}
 
     return _generate
 

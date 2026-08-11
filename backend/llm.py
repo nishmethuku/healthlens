@@ -38,6 +38,8 @@ def _get_client() -> Groq:
 class LLMResponse(TypedDict):
     answer: str
     citations: list[dict[str, str]]
+    prompt_tokens: int
+    completion_tokens: int
 
 
 def _build_messages(question: str, sources: list[RankedAbstract]) -> list[dict[str, str]]:
@@ -67,16 +69,32 @@ def generate_answer(question: str, sources: list[RankedAbstract]) -> LLMResponse
         {"index": str(i + 1), "title": s["title"], "pmid": s["pmid"]}
         for i, s in enumerate(sources)
     ]
+    usage = completion.usage
+    prompt_tokens = usage.prompt_tokens if usage else 0
+    completion_tokens = usage.completion_tokens if usage else 0
 
-    return {"answer": answer.strip(), "citations": citations}
+    return {
+        "answer": answer.strip(),
+        "citations": citations,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
 
 
-def stream_answer(question: str, sources: list[RankedAbstract]) -> Iterator[str]:
+def stream_answer(
+    question: str, sources: list[RankedAbstract], usage_sink: dict | None = None
+) -> Iterator[str]:
     """Call Groq with stream=True; yield answer text deltas as they arrive.
 
     Synchronous generator (the Groq SDK's stream is sync) — callers on the
     async side must iterate it via starlette's iterate_in_threadpool rather
     than calling next() directly on the event loop.
+
+    Groq's SDK doesn't support the OpenAI `stream_options={"include_usage"}`
+    param, but it includes `usage` on the final chunk regardless — if
+    usage_sink is given, it's populated in place once that chunk arrives
+    (a generator can't both yield text and return a value, so this is the
+    plumbing for callers that need token counts after the stream ends).
     """
     client = _get_client()
     stream = client.chat.completions.create(
@@ -86,6 +104,9 @@ def stream_answer(question: str, sources: list[RankedAbstract]) -> Iterator[str]
         stream=True,
     )
     for chunk in stream:
+        if chunk.usage is not None and usage_sink is not None:
+            usage_sink["prompt_tokens"] = chunk.usage.prompt_tokens
+            usage_sink["completion_tokens"] = chunk.usage.completion_tokens
         delta = chunk.choices[0].delta.content
         if delta:
             yield delta
