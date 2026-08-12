@@ -4,12 +4,11 @@ python-dotenv
 groq
 sentence-transformers
 faiss-cpu
-rank-bm25
+scipy
 httpx
 pydantic
 pydantic-settings
 slowapi
 cachetools
-nltk
 prometheus-client
 tqdm

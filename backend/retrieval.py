@@ -1,55 +1,19 @@
 import json
 import logging
+import math
 import os
 import re
+from collections import Counter
 from pathlib import Path
 from typing import TypedDict
 
 import faiss
-import nltk
 import numpy as np
-from rank_bm25 import BM25Okapi
+from scipy import sparse
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from config import get_settings
 from ingest import Abstract
-
-_nltk_ready = False
-
-
-def _ensure_nltk_data() -> None:
-    """Download the sentence tokenizer's data file on first use, not at
-    import time — most callers (tests, tooling) never chunk anything."""
-    global _nltk_ready
-    if _nltk_ready:
-        return
-    try:
-        nltk.data.find("tokenizers/punkt_tab")
-    except LookupError:
-        import ssl
-
-        try:
-            import certifi
-
-            ssl._create_default_https_context = lambda: ssl.create_default_context(
-                cafile=certifi.where()
-            )
-        except ImportError:
-            pass
-        nltk.download("punkt_tab", quiet=True)
-    _nltk_ready = True
-
-
-def chunk_abstract(title: str, abstract: str) -> list[str]:
-    """Split an abstract into sentence-level chunks, each prefixed with the
-    title for context — a lone sentence like "Results were significant" is
-    meaningless without it. Falls back to the title alone if there's no
-    abstract body (e.g. the ingest-side "(No abstract available.)" case)."""
-    _ensure_nltk_data()
-    sentences = [s.strip() for s in nltk.sent_tokenize(abstract) if s.strip()] if abstract else []
-    if not sentences:
-        return [title] if title else []
-    return [f"{title} {s}" for s in sentences]
 
 logger = logging.getLogger(__name__)
 
@@ -114,82 +78,142 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"\w+", text.lower())
 
 
+class _FastBM25:
+    """Drop-in replacement for rank_bm25.BM25Okapi, scored via a sparse
+    term-document matrix instead of one Python dict per document.
+
+    rank_bm25's get_scores() does `doc.get(term)` against every document's
+    frequency dict for every query term — O(corpus_size) per query term. At
+    ~200k docs that made a single BM25 query take on the order of tens of
+    seconds under an earlier sentence-chunked indexing experiment (2.2M
+    chunks), and eval_harness.py calls get_scores() 150 times (50 questions
+    x 3 BM25-touching modes), dominating the eval runtime. A term with zero
+    frequency in a document contributes exactly 0 to that document's score,
+    so restricting the computation to a term's nonzero postings (its sparse
+    matrix column) reproduces identical scores while only touching documents
+    that actually contain the term — verified to match rank_bm25's output
+    bit-for-bit (within float64 rounding) on randomized corpora.
+    """
+
+    def __init__(
+        self, tokenized_corpus: list[list[str]], k1: float = 1.5, b: float = 0.75, epsilon: float = 0.25
+    ) -> None:
+        self.k1 = k1
+        self.b = b
+        self.corpus_size = len(tokenized_corpus)
+
+        vocab: dict[str, int] = {}
+        rows: list[int] = []
+        cols: list[int] = []
+        data: list[int] = []
+        doc_len = np.empty(self.corpus_size, dtype=np.float64)
+        doc_freq: dict[str, int] = {}
+
+        for doc_idx, tokens in enumerate(tokenized_corpus):
+            doc_len[doc_idx] = len(tokens)
+            freqs: dict[str, int] = {}
+            for tok in tokens:
+                freqs[tok] = freqs.get(tok, 0) + 1
+            for tok, freq in freqs.items():
+                col = vocab.setdefault(tok, len(vocab))
+                rows.append(doc_idx)
+                cols.append(col)
+                data.append(freq)
+                doc_freq[tok] = doc_freq.get(tok, 0) + 1
+
+        self.avgdl = float(doc_len.mean()) if self.corpus_size else 0.0
+        self.doc_len = doc_len
+        self.vocab = vocab
+
+        # Matches rank_bm25.BM25Okapi._calc_idf: negative-idf terms (those
+        # appearing in over half the corpus) get floored to epsilon * the
+        # mean idf computed *before* flooring, not after.
+        idf = np.empty(len(vocab), dtype=np.float64)
+        for tok, col in vocab.items():
+            freq = doc_freq[tok]
+            idf[col] = math.log(self.corpus_size - freq + 0.5) - math.log(freq + 0.5)
+        negative = idf < 0
+        if negative.any():
+            idf[negative] = epsilon * idf.mean()
+        self.idf = idf
+
+        matrix = sparse.coo_matrix(
+            (data, (rows, cols)), shape=(self.corpus_size, len(vocab)), dtype=np.float64
+        )
+        self.term_doc_freq = matrix.tocsc()
+
+    def get_scores(self, query: list[str]) -> np.ndarray:
+        scores = np.zeros(self.corpus_size, dtype=np.float64)
+        indptr = self.term_doc_freq.indptr
+        indices = self.term_doc_freq.indices
+        data = self.term_doc_freq.data
+        for term, qf in Counter(query).items():
+            col = self.vocab.get(term)
+            if col is None:
+                continue
+            idf_val = self.idf[col]
+            start, end = indptr[col], indptr[col + 1]
+            doc_idx = indices[start:end]
+            freqs = data[start:end]
+            denom = freqs + self.k1 * (1 - self.b + self.b * self.doc_len[doc_idx] / self.avgdl)
+            scores[doc_idx] += qf * idf_val * (freqs * (self.k1 + 1)) / denom
+        return scores
+
+
 RetrievalMode = str  # "hybrid" | "bm25" | "dense"
 
 
-def _embedding_cache_paths(
-    abstracts: list[Abstract], num_chunks: int, cache_dir: Path
-) -> tuple[Path, Path]:
-    """Cache key = corpus size + chunk count + first/last PMID + embedding model,
-    so a changed corpus, a chunking-logic change, or a model swap all invalidate
-    automatically instead of silently serving stale/mismatched vectors."""
+def _embedding_cache_paths(abstracts: list[Abstract], cache_dir: Path) -> tuple[Path, Path]:
+    """Cache key = corpus size + first/last PMID + embedding model, so a changed
+    corpus or model swap invalidates automatically instead of silently serving
+    stale vectors."""
     import hashlib
 
-    fingerprint = (
-        f"chunked:{len(abstracts)}:{num_chunks}:"
-        f"{abstracts[0]['pmid']}:{abstracts[-1]['pmid']}:{EMBEDDING_MODEL_ID}"
-    )
+    fingerprint = f"{len(abstracts)}:{abstracts[0]['pmid']}:{abstracts[-1]['pmid']}:{EMBEDDING_MODEL_ID}"
     digest = hashlib.sha1(fingerprint.encode()).hexdigest()[:16]
     return cache_dir / f"embs_{digest}.npy", cache_dir / f"faiss_{digest}.index"
 
 
 class CorpusIndex:
-    """Pre-built BM25 + dense indices over sentence-level chunks of the corpus.
+    """Pre-built BM25 + dense indices for repeated queries over a fixed corpus.
 
-    A whole-abstract embedding blurs every sentence in it into one vector, so
-    a single relevant claim buried in an otherwise off-topic abstract can't
-    surface on its own. Indexing per-sentence chunks instead lets that claim
-    be found directly, at the cost of ~N_sentences more vectors to build and
-    search. Chunk granularity is purely an internal indexing detail —
-    retrieve() always dedupes back to one (highest-scoring) result per PMID,
-    so callers still get the same PMID-level RankedAbstract shape as before.
-
-    Dense embeddings are the expensive part to build (one encode() pass over
-    every chunk) and cheap to persist, so they're cached to disk keyed on a
-    corpus+chunking+model fingerprint. BM25 rebuilds from tokenized chunk text
-    every time since it's fast and rank_bm25 has no built-in serialization.
+    Dense embeddings are the expensive part to build (one encode() pass over the
+    whole corpus) and cheap to persist, so they're cached to disk keyed on corpus
+    fingerprint + embedding model. BM25 rebuilds from tokenized text every time
+    since building the sparse matrix is fast even at ~200k docs and there's no
+    built-in serialization for it.
     """
 
     def __init__(self, abstracts: list[Abstract], cache_dir: Path | None = None) -> None:
         self.abstracts = abstracts
-        self.abstract_by_pmid = {a["pmid"]: a for a in abstracts}
-
-        self.chunk_texts: list[str] = []
-        self.chunk_pmids: list[str] = []
-        for a in abstracts:
-            for chunk in chunk_abstract(a["title"], a["abstract"]):
-                self.chunk_texts.append(chunk)
-                self.chunk_pmids.append(a["pmid"])
-
-        self.tokenized = [_tokenize(c) for c in self.chunk_texts]
-        self.bm25 = BM25Okapi(self.tokenized) if self.chunk_texts else None
+        self.corpus = [f"{a['title']} {a['abstract']}" for a in abstracts]
+        self.tokenized = [_tokenize(doc) for doc in self.corpus]
+        self.bm25 = _FastBM25(self.tokenized) if abstracts else None
         self.doc_embs: np.ndarray | None = None
         self.faiss_index: faiss.IndexFlatIP | None = None
-        if self.chunk_texts:
-            self.doc_embs, self.faiss_index = self._load_or_build_dense(cache_dir)
+        if abstracts:
+            self.doc_embs, self.faiss_index = self._load_or_build_dense(abstracts, cache_dir)
 
     def _load_or_build_dense(
-        self, cache_dir: Path | None
+        self, abstracts: list[Abstract], cache_dir: Path | None
     ) -> tuple[np.ndarray, faiss.IndexFlatIP]:
         emb_path = index_path = None
         if cache_dir is not None:
             cache_dir.mkdir(parents=True, exist_ok=True)
-            emb_path, index_path = _embedding_cache_paths(
-                self.abstracts, len(self.chunk_texts), cache_dir
-            )
+            emb_path, index_path = _embedding_cache_paths(abstracts, cache_dir)
             if emb_path.exists() and index_path.exists():
                 try:
                     doc_embs = np.load(emb_path)
                     faiss_index = faiss.read_index(str(index_path))
                     logger.info(
-                        "loaded cached dense index", extra={"num_chunks": len(self.chunk_texts)}
+                        "loaded cached dense index", extra={"num_docs": len(abstracts)}
                     )
                     return doc_embs, faiss_index
                 except Exception:
                     logger.warning("cached index unreadable, rebuilding", exc_info=True)
 
         model = _get_model()
-        doc_embs = model.encode(self.chunk_texts, normalize_embeddings=True).astype(np.float32)
+        doc_embs = model.encode(self.corpus, normalize_embeddings=True).astype(np.float32)
         dim = doc_embs.shape[1]
         faiss_index = faiss.IndexFlatIP(dim)
         faiss_index.add(doc_embs)
@@ -198,8 +222,16 @@ class CorpusIndex:
             try:
                 np.save(emb_path, doc_embs)
                 faiss.write_index(faiss_index, str(index_path))
-            except OSError:
+            except (OSError, RuntimeError):
+                # faiss raises RuntimeError (not OSError) for I/O failures like
+                # a full disk — confirmed in production: "No space left on
+                # device" surfaced as RuntimeError and wasn't caught here,
+                # which let it propagate out of CorpusIndex entirely instead
+                # of degrading to in-memory-only as intended. A partially
+                # written index file from the failed attempt may be left on
+                # disk; delete it so a later run doesn't try to load garbage.
                 logger.warning("failed to persist dense index cache", exc_info=True)
+                index_path.unlink(missing_ok=True)
 
         return doc_embs, faiss_index
 
@@ -218,31 +250,19 @@ class CorpusIndex:
         return _retrieve_from_index(self, query, top_k, mode)
 
 
-def _rank_chunks_dedup_by_pmid(
-    corpus_index: CorpusIndex, scores: np.ndarray, top_k: int
+def _rank_abstracts(
+    abstracts: list[Abstract], scores: np.ndarray, top_k: int
 ) -> list[RankedAbstract]:
-    """Walk chunks best-score-first, keeping only the first (highest-scoring)
-    chunk seen per PMID, until top_k distinct documents are collected."""
-    order = np.argsort(scores)[::-1]
-    seen_pmids: set[str] = set()
-    results: list[RankedAbstract] = []
-    for idx in order:
-        pmid = corpus_index.chunk_pmids[idx]
-        if pmid in seen_pmids:
-            continue
-        seen_pmids.add(pmid)
-        abstract = corpus_index.abstract_by_pmid[pmid]
-        results.append(
-            {
-                "title": abstract["title"],
-                "abstract": abstract["abstract"],
-                "pmid": pmid,
-                "score": float(scores[idx]),
-            }
-        )
-        if len(results) >= top_k:
-            break
-    return results
+    ranked_indices = np.argsort(scores)[::-1][:top_k]
+    return [
+        {
+            "title": abstracts[i]["title"],
+            "abstract": abstracts[i]["abstract"],
+            "pmid": abstracts[i]["pmid"],
+            "score": float(scores[i]),
+        }
+        for i in ranked_indices
+    ]
 
 
 def _retrieve_from_index(
@@ -263,23 +283,23 @@ def _retrieve_from_index(
         scores = np.array(
             corpus_index.bm25.get_scores(_tokenize(query)), dtype=np.float32
         )
-        return _rank_chunks_dedup_by_pmid(corpus_index, scores, top_k)
+        return _rank_abstracts(abstracts, scores, top_k)
 
     model = _get_model()
     query_emb = model.encode([query], normalize_embeddings=True).astype(np.float32)
     assert corpus_index.faiss_index is not None
-    dense_scores, _ = corpus_index.faiss_index.search(query_emb, len(corpus_index.chunk_texts))
+    dense_scores, _ = corpus_index.faiss_index.search(query_emb, len(abstracts))
     dense_scores = dense_scores[0].astype(np.float32)
 
     if mode == "dense":
-        return _rank_chunks_dedup_by_pmid(corpus_index, dense_scores, top_k)
+        return _rank_abstracts(abstracts, dense_scores, top_k)
 
     assert corpus_index.bm25 is not None
     bm25_scores = np.array(
         corpus_index.bm25.get_scores(_tokenize(query)), dtype=np.float32
     )
     combined = 0.5 * _normalize(bm25_scores) + 0.5 * _normalize(dense_scores)
-    return _rank_chunks_dedup_by_pmid(corpus_index, combined, top_k)
+    return _rank_abstracts(abstracts, combined, top_k)
 
 
 def _get_reranker() -> CrossEncoder:
@@ -353,16 +373,23 @@ def load_corpus_from_file(path: Path = CORPUS_PATH) -> list[Abstract]:
 
 
 def get_corpus_index() -> CorpusIndex | None:
-    """Return a cached CorpusIndex built from pubmed_abstracts.jsonl, or None if missing."""
+    """Return a cached CorpusIndex built from pubmed_abstracts.jsonl, or None if missing.
+
+    _corpus_checked is only set to True after construction succeeds. Setting
+    it beforehand (the original bug) meant a mid-construction exception left
+    _corpus_index permanently None for the rest of the process — every future
+    call short-circuited on the "already checked" branch and silently fell
+    back to live-fetch-per-query forever, instead of retrying on next call.
+    """
     global _corpus_index, _corpus_checked
     if _corpus_checked:
         return _corpus_index
 
-    _corpus_checked = True
     if CORPUS_PATH.exists():
         abstracts = load_corpus_from_file(CORPUS_PATH)
         if abstracts:
             _corpus_index = CorpusIndex(abstracts, cache_dir=INDEX_CACHE_DIR)
+    _corpus_checked = True
     return _corpus_index
 
 
