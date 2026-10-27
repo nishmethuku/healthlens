@@ -24,18 +24,23 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    # NeuML/pubmedbert-base-embeddings was evaluated as a domain-specific swap
-    # (2026-08-10) but reverted: on an 8k-doc coverage subset, its dense leg
-    # still returned 0.0 recall (same failure pattern as MiniLM) and dragged
-    # hybrid fusion below plain BM25 alone. MiniLM + cross-encoder reranking
-    # is the only combination with proven full-200k-corpus improvement so far
-    # (hybrid_rerank 0.12 vs hybrid 0.092 — see eval/results_rerank.json).
     embedding_model_id: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2", alias="EMBEDDING_MODEL_ID"
     )
+    # Some embedding models expect an instruction prefix, e.g. e5 uses
+    # "query: " / "passage: " and bge uses a query instruction. Leave empty for MiniLM.
+    embedding_query_prefix: str = Field(default="", alias="EMBEDDING_QUERY_PREFIX")
+    embedding_doc_prefix: str = Field(default="", alias="EMBEDDING_DOC_PREFIX")
     reranker_model_id: str = Field(
         default="cross-encoder/ms-marco-MiniLM-L-6-v2", alias="RERANKER_MODEL_ID"
     )
+
+    # How the BM25 and dense scores are combined: "weighted" (min-max blend) or "rrf"
+    # (reciprocal rank fusion). Compare both with eval/eval_harness.py before changing.
+    fusion_method: str = Field(default="weighted", alias="FUSION_METHOD")
+    dense_weight: float = Field(default=0.5, alias="DENSE_WEIGHT")
+    # Candidates taken from fusion before the cross-encoder reranks them down to top_k.
+    rerank_pool_size: int = Field(default=25, alias="RERANK_POOL_SIZE")
 
     @property
     def cors_origin_list(self) -> list[str]:
