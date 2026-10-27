@@ -6,6 +6,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Literal
 
+import groq
 from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
@@ -31,7 +32,7 @@ import metrics
 from config import get_settings
 from grounding import analyze_citations, make_snippet
 from guardrails import check_query
-from ingest import fetch_pubmed_abstracts
+from ingest import PubMedUnavailableError, fetch_pubmed_abstracts
 from llm import generate_answer, stream_answer
 from logging_config import configure_logging, request_id_var
 from query_decomposition import decomposed_retrieve
@@ -249,7 +250,10 @@ async def _retrieve_top(question: str, decompose: bool) -> list[RankedAbstract] 
             return await asyncio.to_thread(decomposed_retrieve, question, corpus_index, 5)
         return await asyncio.to_thread(hybrid_retrieve_indexed, question, 5)
 
-    abstracts = await fetch_pubmed_abstracts(question)
+    ncbi_key = settings.ncbi_api_key
+    if ncbi_key == "your_ncbi_api_key_here":
+        ncbi_key = None
+    abstracts = await fetch_pubmed_abstracts(question, api_key=ncbi_key)
     if not abstracts:
         return None
     return await asyncio.to_thread(hybrid_retrieve, question, abstracts, 5)
@@ -321,12 +325,36 @@ async def query(request: Request, req: QueryRequest):
         raise HTTPException(
             status_code=503, detail="HealthLens is temporarily unavailable. Please try again shortly."
         ) from None
-    except Exception:
+    except Exception as exc:
+        friendly = _user_facing_error(exc)
+        if friendly is not None:
+            logger.warning("upstream failure handling query", exc_info=True)
+            raise HTTPException(status_code=friendly[0], detail=friendly[1]) from None
         logger.exception("unhandled error handling query")
         raise HTTPException(
             status_code=500,
             detail="An internal error occurred while processing your question.",
         ) from None
+
+
+def _user_facing_error(exc: Exception) -> tuple[int, str] | None:
+    """Map a known upstream failure to (status, message) the user can act on.
+    Returns None for anything unexpected, which stays a generic 500."""
+    if isinstance(exc, groq.RateLimitError):
+        return 429, "HealthLens is handling a lot of requests right now. Please try again in a minute."
+    if isinstance(exc, PubMedUnavailableError):
+        return 503, "PubMed could not be reached. Please try again shortly."
+    if isinstance(
+        exc,
+        (
+            groq.APIConnectionError,
+            groq.InternalServerError,
+            groq.AuthenticationError,
+            groq.PermissionDeniedError,
+        ),
+    ):
+        return 503, "HealthLens is temporarily unavailable. Please try again shortly."
+    return None
 
 
 def _record_grounding_metrics(report: GroundingReport) -> None:
@@ -410,7 +438,12 @@ async def _stream_query_events(question: str, decompose: bool):
     except ValueError:
         logger.exception("service misconfiguration handling streamed query")
         yield _sse("error", {"detail": "HealthLens is temporarily unavailable. Please try again shortly."})
-    except Exception:
+    except Exception as exc:
+        friendly = _user_facing_error(exc)
+        if friendly is not None:
+            logger.warning("upstream failure handling streamed query", exc_info=True)
+            yield _sse("error", {"detail": friendly[1]})
+            return
         logger.exception("unhandled error handling streamed query")
         yield _sse("error", {"detail": "An internal error occurred while processing your question."})
 
