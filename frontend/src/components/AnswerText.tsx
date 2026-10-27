@@ -31,7 +31,7 @@ export function AnswerText({ text, sourceCount, onCite }: Props) {
             type="button"
             onClick={() => onCite(n)}
             aria-label={`Go to source ${n}`}
-            className="mx-0.5 inline-flex min-w-[1.4rem] -translate-y-px items-center justify-center rounded-md border border-sky-400/30 bg-sky-400/10 px-1 text-xs font-semibold text-sky-300 transition-colors hover:bg-sky-400/25"
+            className="mx-0.5 inline-flex min-w-[1.4rem] -translate-y-px items-center justify-center rounded-md border border-emerald-200/50 bg-emerald-200/20 px-1 text-xs font-semibold text-emerald-100 transition-colors hover:bg-emerald-200/35"
           >
             {n}
           </button>,
@@ -41,7 +41,7 @@ export function AnswerText({ text, sourceCount, onCite }: Props) {
           <span
             key={key++}
             title="This answer cites a source that was not retrieved"
-            className="mx-0.5 inline-flex min-w-[1.4rem] items-center justify-center rounded-md border border-red-400/30 bg-red-400/10 px-1 text-xs font-semibold text-red-300 line-through"
+            className="mx-0.5 inline-flex min-w-[1.4rem] items-center justify-center rounded-md border border-red-200/50 bg-red-300/20 px-1 text-xs font-semibold text-red-100 line-through"
           >
             {n}
           </span>,
