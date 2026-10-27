@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # Candidates taken from fusion before the cross-encoder reranks them down to top_k.
     rerank_pool_size: int = Field(default=25, alias="RERANK_POOL_SIZE")
 
+    # Keyword-only retrieval with no embedding model or reranker. Fits in the
+    # 512 MB of a free host; answer quality is a bit lower than the full pipeline.
+    lite_mode: bool = Field(default=False, alias="LITE_MODE")
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
