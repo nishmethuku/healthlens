@@ -1,14 +1,17 @@
 import json
+import logging
 import re
 from typing import TYPE_CHECKING
 
-from groq import Groq
+from groq import APIError, Groq
 
 from config import get_settings
 from retrieval import RankedAbstract, rerank_candidates
 
 if TYPE_CHECKING:
     from retrieval import CorpusIndex
+
+logger = logging.getLogger(__name__)
 
 MODEL = "llama-3.3-70b-versatile"
 SUB_QUERY_TOP_K = 10
@@ -106,7 +109,13 @@ def decomposed_retrieve(
     top_k: int = FINAL_TOP_K,
 ) -> list[RankedAbstract]:
     """Decompose question, retrieve per sub-query, merge and return top abstracts."""
-    sub_queries = decompose_query(question)
+    try:
+        sub_queries = decompose_query(question)
+    except APIError:
+        # Splitting the question is an optimization. If the LLM call fails,
+        # search with the original question instead of failing the request.
+        logger.warning("query decomposition failed, using the original question", exc_info=True)
+        sub_queries = [question]
     result_lists = [
         corpus_index.retrieve(sq, top_k=SUB_QUERY_TOP_K, mode="hybrid")
         for sq in sub_queries
