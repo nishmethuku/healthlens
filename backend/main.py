@@ -351,6 +351,26 @@ async def _stream_query_events(question: str, decompose: bool):
         yield _sse("flagged", {"warning": warning})
         return
 
+    cache_key = cache.make_key(question, decompose)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        # Same entries as /api/v1/query, so a question answered by either
+        # endpoint is free on the other. Replayed as one token event.
+        logger.info("streamed query cache hit", extra={"cache_key": cache_key})
+        metrics.cache_hits_total.inc()
+        yield _sse(
+            "sources",
+            {
+                "sources": [s.model_dump() for s in cached["sources"]],
+                "query_id": str(uuid.uuid4()),
+            },
+        )
+        yield _sse("token", {"text": cached["answer"]})
+        if cached.get("grounding") is not None:
+            yield _sse("grounding", cached["grounding"].model_dump())
+        yield _sse("done", {})
+        return
+
     try:
         top = await _retrieve_top(question, decompose)
 
@@ -359,8 +379,11 @@ async def _stream_query_events(question: str, decompose: bool):
             return
         metrics.retrieval_recall_proxy.observe(len(top) / RETRIEVAL_TOP_K)
 
-        sources = [_to_source(s).model_dump() for s in top]
-        yield _sse("sources", {"sources": sources, "query_id": str(uuid.uuid4())})
+        source_models = [_to_source(s) for s in top]
+        yield _sse(
+            "sources",
+            {"sources": [s.model_dump() for s in source_models], "query_id": str(uuid.uuid4())},
+        )
 
         usage_sink: dict = {}
         parts: list[str] = []
@@ -373,8 +396,14 @@ async def _stream_query_events(question: str, decompose: bool):
             metrics.record_token_usage(
                 usage_sink.get("prompt_tokens", 0), usage_sink.get("completion_tokens", 0)
             )
-        report = GroundingReport(**analyze_citations("".join(parts), len(top)))
+        answer_text = "".join(parts)
+        report = GroundingReport(**analyze_citations(answer_text, len(top)))
         _record_grounding_metrics(report)
+        if answer_text.strip():
+            cache.set(
+                cache_key,
+                {"answer": answer_text, "sources": source_models, "grounding": report},
+            )
         yield _sse("grounding", report.model_dump())
         yield _sse("done", {})
 

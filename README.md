@@ -27,7 +27,8 @@ for citations that point at sources that were never retrieved.
 - **Streaming answers** — `/api/v1/query/stream` sends the Groq response
   token-by-token over SSE; `/api/v1/query` returns the full answer in one response
 - **Query caching** — 500-entry, 1-hour TTL in-memory cache keyed on the normalized
-  question + decompose flag
+  question + decompose flag, shared by `/query` and `/query/stream` (a cached stream
+  replays the answer as a single token event)
 - **Feedback loop** — every answer carries a `query_id`; thumbs up/down posts to
   `/api/v1/feedback` and appends to `backend/data/feedback.jsonl`
 - **Guardrails** — regex-based self-harm/crisis detection short-circuits before the
@@ -51,7 +52,7 @@ flowchart TD
     RL -->|no| R429["429"]
     RL -->|yes| GR{"Guardrails flagged?"}
     GR -->|yes| Warn["Crisis-resource warning<br/>(no LLM call)"]
-    GR -->|no| Cache{"Cached?<br/>(non-streaming only)"}
+    GR -->|no| Cache{"Cached?"}
     Cache -->|hit| CachedResp["Cached answer"]
     Cache -->|miss| Retrieval
 
@@ -217,7 +218,7 @@ Run tests and lint:
 
 ```bash
 cd backend && pytest -v && ruff check .
-cd frontend && npm run lint && npm run build   # build runs tsc --noEmit first
+cd frontend && npm run lint && npm test && npm run build   # build runs tsc --noEmit first
 ```
 
 ### Docker
@@ -365,7 +366,7 @@ Notes:
 ## CI/CD
 
 `.github/workflows/ci.yml` runs on every push/PR: backend lint (`ruff`) + test
-(`pytest`) + Docker build, frontend lint (`eslint`) + typecheck+build (`tsc` + `vite
+(`pytest`) + Docker build, frontend lint (`eslint`) + tests (`vitest`) + typecheck+build (`tsc` + `vite
 build`) + Docker build.
 
 ## Disclaimer
