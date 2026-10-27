@@ -1,0 +1,45 @@
+# Render Blueprint: deploys the API and the web app from this repo.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Values marked "sync: false" are asked for once, when the Blueprint is first
+# created, so no secret is stored in this file.
+services:
+  - type: web
+    runtime: docker
+    name: healthlens-api
+    # The embedding model and cross-encoder together need more than 512 MB of
+    # RAM, so use a 2 GB plan. See https://render.com/docs/compute-plans
+    plan: 1c-2g
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health/live
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: GROQ_API_KEY
+        sync: false
+      # Must equal VITE_HEALTHLENS_API_KEY on healthlens-web below.
+      # Generate one: python -c "import secrets; print(secrets.token_urlsafe(32))"
+      - key: HEALTHLENS_API_KEY
+        sync: false
+      # The web app's public URL, for example https://healthlens-web.onrender.com
+      - key: CORS_ORIGINS
+        sync: false
+
+  - type: web
+    runtime: static
+    name: healthlens-web
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # The API's public URL, for example https://healthlens-api.onrender.com
+      - key: VITE_API_URL
+        sync: false
+      # Baked into the public JS bundle, so it only deters casual abuse.
+      - key: VITE_HEALTHLENS_API_KEY
+        sync: false

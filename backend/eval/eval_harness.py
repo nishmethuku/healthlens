@@ -47,7 +47,9 @@ DEFAULT_BENCHMARK = EVAL_DIR / "benchmark.json"
 DEFAULT_CORPUS = BACKEND_DIR / "data" / "pubmed_abstracts.jsonl"
 DEFAULT_RESULTS = EVAL_DIR / "results.json"
 
-MODES = ("bm25", "dense", "hybrid", "hybrid_rerank")
+# hybrid / hybrid_rerank use the FUSION_METHOD from config (weighted by default);
+# the _rrf modes force reciprocal rank fusion so the two can be compared directly.
+MODES = ("bm25", "dense", "hybrid", "hybrid_rrf", "hybrid_rerank", "hybrid_rrf_rerank")
 TOP_K = 5
 
 
@@ -109,6 +111,12 @@ def evaluate_mode(
         relevant = {str(p) for p in item["ground_truth_pmids"]}
         if mode == "hybrid_rerank":
             results = corpus_index.retrieve(question, top_k=TOP_K, mode="hybrid", rerank=True)
+        elif mode == "hybrid_rrf_rerank":
+            results = corpus_index.retrieve(
+                question, top_k=TOP_K, mode="hybrid", rerank=True, fusion="rrf"
+            )
+        elif mode == "hybrid_rrf":
+            results = corpus_index.retrieve(question, top_k=TOP_K, mode="hybrid", fusion="rrf")
         else:
             results = corpus_index.retrieve(question, top_k=TOP_K, mode=mode)
         retrieved = [r["pmid"] for r in results]
@@ -125,16 +133,16 @@ def evaluate_mode(
     }
 
 
-def print_results_table(results: dict[str, dict[str, float]]) -> None:
+def print_results_table(results: dict[str, dict[str, float]], modes: tuple[str, ...]) -> None:
     metrics = ["recall_at_5", "mrr", "precision_at_5"]
     col_w = 14
-    header = f"{'Mode':<10}" + "".join(f"{m:>{col_w}}" for m in metrics)
+    header = f"{'Mode':<20}" + "".join(f"{m:>{col_w}}" for m in metrics)
     print(header)
     print("-" * len(header))
-    for mode in MODES:
+    for mode in modes:
         row = results[mode]
         print(
-            f"{mode:<10}"
+            f"{mode:<20}"
             + "".join(f"{row[m]:>{col_w}.4f}" for m in metrics)
         )
 
@@ -146,7 +154,15 @@ def main() -> None:
     parser.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     parser.add_argument("--output", type=Path, default=DEFAULT_RESULTS)
+    parser.add_argument(
+        "--modes",
+        nargs="+",
+        choices=MODES,
+        default=list(MODES),
+        help="Subset of modes to evaluate (default: all)",
+    )
     args = parser.parse_args()
+    modes = tuple(args.modes)
 
     if not args.benchmark.exists():
         sys.exit(f"Benchmark not found: {args.benchmark}")
@@ -163,17 +179,18 @@ def main() -> None:
     corpus_index = CorpusIndex(abstracts, cache_dir=INDEX_CACHE_DIR)
 
     results: dict[str, dict[str, float]] = {}
-    for mode in MODES:
+    for mode in modes:
         print(f"Evaluating {mode} ...")
         results[mode] = evaluate_mode(benchmark, corpus_index, mode)
 
     print("\nRetrieval evaluation (top-5)\n")
-    print_results_table(results)
+    print_results_table(results, modes)
 
     payload = {
         "top_k": TOP_K,
         "num_questions": len(benchmark),
         "corpus_size": len(abstracts),
+        "embedding_model": os.environ.get("EMBEDDING_MODEL_ID", "default"),
         "modes": results,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

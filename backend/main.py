@@ -29,6 +29,7 @@ import cache
 import feedback
 import metrics
 from config import get_settings
+from grounding import analyze_citations, make_snippet
 from guardrails import check_query
 from ingest import fetch_pubmed_abstracts
 from llm import generate_answer, stream_answer
@@ -84,7 +85,10 @@ app.add_middleware(
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    # X-API-Key is sent by the browser frontend on every query, so it must be
+    # allowed or the CORS preflight is rejected before the request is made.
+    allow_headers=["Content-Type", "X-API-Key", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
 
 
@@ -162,14 +166,31 @@ class QueryRequest(BaseModel):
 class Source(BaseModel):
     title: str
     pmid: str
+    snippet: str = ""
+
+
+class GroundingReport(BaseModel):
+    cited: list[int]
+    invalid: list[int]
+    claim_sentences: int
+    cited_sentences: int
+    coverage: float
+    grounded: bool
 
 
 class QueryResponse(BaseModel):
     query_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     answer: str | None = None
     sources: list[Source] = []
+    grounding: GroundingReport | None = None
     flagged: bool = False
     warning: str | None = None
+
+
+def _to_source(item: RankedAbstract) -> Source:
+    return Source(
+        title=item["title"], pmid=item["pmid"], snippet=make_snippet(item["abstract"])
+    )
 
 
 class FeedbackRequest(BaseModel):
@@ -261,7 +282,11 @@ async def query(request: Request, req: QueryRequest):
         metrics.cache_hits_total.inc()
         # Fresh query_id per request even on a hit — two different callers
         # served the same cached text still submit feedback independently.
-        return QueryResponse(answer=cached["answer"], sources=cached["sources"])
+        return QueryResponse(
+            answer=cached["answer"],
+            sources=cached["sources"],
+            grounding=cached.get("grounding"),
+        )
 
     try:
         top = await _retrieve_top(question, req.decompose)
@@ -280,9 +305,13 @@ async def query(request: Request, req: QueryRequest):
 
         result = await asyncio.to_thread(generate_answer, question, top)
         metrics.record_token_usage(result["prompt_tokens"], result["completion_tokens"])
-        sources = [Source(title=s["title"], pmid=s["pmid"]) for s in top]
-        cache.set(cache_key, {"answer": result["answer"], "sources": sources})
-        return QueryResponse(answer=result["answer"], sources=sources)
+        sources = [_to_source(s) for s in top]
+        report = GroundingReport(**analyze_citations(result["answer"], len(top)))
+        _record_grounding_metrics(report)
+        cache.set(
+            cache_key, {"answer": result["answer"], "sources": sources, "grounding": report}
+        )
+        return QueryResponse(answer=result["answer"], sources=sources, grounding=report)
 
     except ValueError:
         # Missing/invalid API key etc. — a config problem, not a client error.
@@ -300,6 +329,14 @@ async def query(request: Request, req: QueryRequest):
         ) from None
 
 
+def _record_grounding_metrics(report: GroundingReport) -> None:
+    metrics.answers_total.labels(grounded=str(report.grounded).lower()).inc()
+    if report.invalid:
+        logger.warning(
+            "answer cites sources that do not exist", extra={"invalid_citations": report.invalid}
+        )
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
@@ -314,6 +351,26 @@ async def _stream_query_events(question: str, decompose: bool):
         yield _sse("flagged", {"warning": warning})
         return
 
+    cache_key = cache.make_key(question, decompose)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        # Same entries as /api/v1/query, so a question answered by either
+        # endpoint is free on the other. Replayed as one token event.
+        logger.info("streamed query cache hit", extra={"cache_key": cache_key})
+        metrics.cache_hits_total.inc()
+        yield _sse(
+            "sources",
+            {
+                "sources": [s.model_dump() for s in cached["sources"]],
+                "query_id": str(uuid.uuid4()),
+            },
+        )
+        yield _sse("token", {"text": cached["answer"]})
+        if cached.get("grounding") is not None:
+            yield _sse("grounding", cached["grounding"].model_dump())
+        yield _sse("done", {})
+        return
+
     try:
         top = await _retrieve_top(question, decompose)
 
@@ -322,18 +379,32 @@ async def _stream_query_events(question: str, decompose: bool):
             return
         metrics.retrieval_recall_proxy.observe(len(top) / RETRIEVAL_TOP_K)
 
-        sources = [{"title": s["title"], "pmid": s["pmid"]} for s in top]
-        yield _sse("sources", {"sources": sources, "query_id": str(uuid.uuid4())})
+        source_models = [_to_source(s) for s in top]
+        yield _sse(
+            "sources",
+            {"sources": [s.model_dump() for s in source_models], "query_id": str(uuid.uuid4())},
+        )
 
         usage_sink: dict = {}
+        parts: list[str] = []
         token_iter = iterate_in_threadpool(stream_answer(question, top, usage_sink))
         async for delta in token_iter:
+            parts.append(delta)
             yield _sse("token", {"text": delta})
 
         if usage_sink:
             metrics.record_token_usage(
                 usage_sink.get("prompt_tokens", 0), usage_sink.get("completion_tokens", 0)
             )
+        answer_text = "".join(parts)
+        report = GroundingReport(**analyze_citations(answer_text, len(top)))
+        _record_grounding_metrics(report)
+        if answer_text.strip():
+            cache.set(
+                cache_key,
+                {"answer": answer_text, "sources": source_models, "grounding": report},
+            )
+        yield _sse("grounding", report.model_dump())
         yield _sse("done", {})
 
     except ValueError:
