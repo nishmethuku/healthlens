@@ -101,3 +101,52 @@ def test_cors_preflight_allows_the_api_key_header(client):
     )
     assert res.status_code == 200
     assert "x-api-key" in res.headers["access-control-allow-headers"].lower()
+
+
+def test_stream_serves_repeated_question_from_cache(client):
+    calls = {"n": 0}
+
+    def counting_stream(question, sources, usage_sink=None):
+        calls["n"] += 1
+        yield "Statins lower LDL cholesterol in high risk adults according to the trial [1]."
+
+    with (
+        patch.object(main, "_retrieve_top", _fake_retrieve_top),
+        patch.object(main, "stream_answer", counting_stream),
+    ):
+        first = client.post(
+            "/api/v1/query/stream", json={"question": "Do statins work?"}, headers=AUTH_HEADERS
+        )
+        second = client.post(
+            "/api/v1/query/stream", json={"question": "  do STATINS work? "}, headers=AUTH_HEADERS
+        )
+
+    assert calls["n"] == 1, "second request should be replayed from the cache"
+    names = [name for name, _ in _parse_events(second.text)]
+    assert names == ["sources", "token", "grounding", "done"]
+    # Each request still gets its own query_id so feedback stays per request.
+    id_first = _parse_events(first.text)[0][1]["query_id"]
+    id_second = _parse_events(second.text)[0][1]["query_id"]
+    assert id_first != id_second
+
+
+def test_stream_answer_is_shared_with_non_streaming_endpoint(client):
+    calls = {"n": 0}
+
+    def counting_generate(question, sources):
+        calls["n"] += 1
+        return _answer(question, sources)
+
+    with (
+        patch.object(main, "_retrieve_top", _fake_retrieve_top),
+        patch.object(main, "stream_answer", _stream),
+        patch.object(main, "generate_answer", counting_generate),
+    ):
+        client.post("/api/v1/query/stream", json={"question": "Do statins work?"}, headers=AUTH_HEADERS)
+        body = client.post(
+            "/api/v1/query", json={"question": "Do statins work?"}, headers=AUTH_HEADERS
+        ).json()
+
+    assert calls["n"] == 0, "non-streaming call should hit the entry the stream stored"
+    assert body["sources"][0]["pmid"] == "111"
+    assert body["grounding"]["grounded"] is True
