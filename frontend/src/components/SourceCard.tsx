@@ -10,28 +10,26 @@ export function SourceCard({ source, number, highlighted }: Props) {
   return (
     <li
       id={`source-${number}`}
-      className={`citation-card scroll-mt-24 rounded-xl border p-5 sm:p-6 ${
-        highlighted
-          ? "border-sky-400/60 bg-sky-400/[0.08]"
-          : "border-white/[0.08] bg-white/[0.025]"
+      className={`citation-card glass-strong scroll-mt-24 rounded-2xl p-5 sm:p-6 ${
+        highlighted ? "!border-emerald-200 ring-2 ring-emerald-200/50" : ""
       }`}
     >
       <div className="flex gap-4">
-        <span className="font-display flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500/20 to-indigo-500/20 text-xs font-bold text-sky-300">
+        <span className="font-display flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15 text-xs font-bold text-white">
           {number}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[0.95rem] font-medium leading-snug text-slate-100">{source.title}</p>
+          <p className="text-[0.95rem] font-medium leading-snug text-white">{source.title}</p>
           {source.snippet && (
-            <p className="mt-2 text-sm leading-relaxed text-slate-400">{source.snippet}</p>
+            <p className="mt-2 text-sm leading-relaxed text-white/80">{source.snippet}</p>
           )}
           <a
             href={`https://pubmed.ncbi.nlm.nih.gov/${source.pmid}/`}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-3 inline-flex items-center gap-1.5 text-sm text-sky-400 transition-colors hover:text-sky-300"
+            className="mt-3 inline-flex items-center gap-1.5 text-sm text-emerald-200 transition-colors hover:text-white"
           >
-            <span className="text-slate-500">PMID</span>
+            <span className="text-white/65">PMID</span>
             <span className="font-mono">{source.pmid}</span>
             <svg
               className="h-3.5 w-3.5 opacity-60"
