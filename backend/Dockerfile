@@ -35,13 +35,15 @@ SentenceTransformer(s.embedding_model_id); \
 CrossEncoder(s.reranker_model_id)" \
     && chown -R appuser:appuser /opt/hf-cache /app
 
+# Hosts like Render inject PORT; 8000 is the default for local docker.
 ENV HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    TRANSFORMERS_OFFLINE=1 \
+    PORT=8000
 
 USER appuser
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health/live').raise_for_status()"
+    CMD python -c "import os, httpx; httpx.get('http://localhost:%s/health/live' % os.environ['PORT']).raise_for_status()"
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]

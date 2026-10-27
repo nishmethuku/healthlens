@@ -1,19 +1,27 @@
 # HealthLens
 
 HealthLens is a full-stack medical Q&A app that answers questions grounded in PubMed
-literature. It runs hybrid retrieval (BM25 + dense embeddings over sentence-level
-chunks, fused and reranked by a cross-encoder) against a local 200k-abstract corpus,
-optionally decomposes complex questions into sub-queries, and generates cited answers
-via Groq (Llama 3.3 70B) — streamed token-by-token or returned as a single response.
+literature. It runs hybrid retrieval (BM25 + dense embeddings, fused and reranked by
+a cross-encoder) against a local 200k-abstract corpus, optionally decomposes complex
+questions into sub-queries, and generates cited answers via Groq (Llama 3.3 70B) —
+streamed token-by-token or returned as a single response. Every answer is checked
+for citations that point at sources that were never retrieved.
 
 > **Not medical advice.** Educational and research use only. Always consult a
 > qualified healthcare professional. See [Disclaimer](#disclaimer).
 
 ## Features
 
-- **Hybrid retrieval** — BM25 + dense (FAISS) fusion over sentence-level chunks of
-  each abstract, deduplicated back to one result per PMID, then reranked by a
-  cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`)
+- **Hybrid retrieval** — BM25 + dense (FAISS) fusion over whole abstracts, using
+  either a weighted blend or reciprocal rank fusion (`FUSION_METHOD`), then reranked
+  by a cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`)
+- **Citation grounding check** — every answer is scanned for citations to sources
+  that do not exist and for factual sentences with no citation; the result is
+  returned as a `grounding` report, shown in the UI, and counted in Prometheus
+- **Clickable citations and source cards** — `[1]` markers in the answer jump to the
+  matching paper, which shows an abstract snippet and a PubMed link
+- **Local history** — past questions and answers are kept in the browser's
+  `localStorage` only; crisis-flagged questions are never saved
 - **Query decomposition** — complex multi-part questions are split into sub-queries
   via Groq before retrieval, then merged
 - **Streaming answers** — `/api/v1/query/stream` sends the Groq response
@@ -47,7 +55,7 @@ flowchart TD
     Cache -->|hit| CachedResp["Cached answer"]
     Cache -->|miss| Retrieval
 
-    subgraph Retrieval["Hybrid retrieval over sentence-level chunks"]
+    subgraph Retrieval["Hybrid retrieval"]
         direction LR
         BM25["BM25"] --> Fusion["Score fusion"]
         Dense["Dense / FAISS"] --> Fusion
@@ -55,7 +63,8 @@ flowchart TD
     end
 
     Rerank --> LLM["Groq llama-3.3-70b<br/>(streamed via SSE or full response)"]
-    LLM --> API
+    LLM --> Check["Citation grounding check"]
+    Check --> API
     API --> FE
 
     API -.-> Metrics[["/metrics (Prometheus)"]]
@@ -70,63 +79,53 @@ Evaluated on **50 medical questions** against the full **200,000-abstract** corp
 | Mode | Recall@5 | MRR | Precision@5 |
 |---|---|---|---|
 | BM25-only | 0.060 | 0.121 | 0.060 |
-| Dense-only | 0.000 | 0.000 | 0.000 |
-| Hybrid (BM25 + dense fusion) | 0.092 | 0.190 | 0.092 |
-| **Hybrid + cross-encoder rerank** | **0.120** | **0.266** | **0.120** |
+| Dense-only (measured with the bug below) | 0.000 | 0.000 | 0.000 |
+| Hybrid (measured with the bug below) | 0.092 | 0.190 | 0.092 |
+| Hybrid + cross-encoder rerank (measured with the bug below) | 0.120 | 0.266 | 0.120 |
 
-Hybrid + rerank is the shipped default and outperforms hybrid-alone by **30%** on
-Recall@5, and BM25-alone by **100%**. See [Design decisions](#design-decisions-the-hubness-investigation)
-for why dense-only sits at exactly 0.000 and why reranking (not a "better" embedding
-model) was the fix.
-
-Reproduce:
+**Only the BM25 row is trustworthy.** The other three were measured before the dense
+retrieval bug described in the next section was fixed, so they need to be re-run:
 
 ```bash
-cd backend && python eval/eval_harness.py
+cd backend && python eval/eval_harness.py            # all modes
+python eval/eval_harness.py --modes dense hybrid hybrid_rrf hybrid_rerank hybrid_rrf_rerank
 ```
 
-## Design decisions: the hubness investigation
+The harness also compares weighted fusion against reciprocal rank fusion
+(`hybrid_rrf*` modes). `python eval/answer_eval.py --limit 10 [--judge]` measures
+answer quality instead of retrieval: how often citations are valid and how many
+factual sentences are cited, plus an optional LLM judge for claim support.
 
-Dense-only retrieval scores exactly **0.000** — not "poor," but a complete failure:
-across all 50 benchmark questions, it returns the **same handful of PMIDs regardless
-of query topic** (confirmed by inspection — identical top-5 for unrelated cardiology,
-anticoagulation, and stroke questions). This is **embedding hubness**: in a bi-encoder
-space, a small set of generically-worded documents sit near the centroid and win
-cosine similarity against almost any query, independent of what the query is actually
-about. It's a known failure mode of small general-purpose sentence embedding models
-at large corpus scale, and it gets *worse*, not better, as the corpus grows — an 8k-doc
-subset didn't reproduce it as severely as the full 200k corpus did.
+## Design decisions: the dense retrieval bug
 
-Five fixes were tried, in order, before landing on the one that worked:
+Dense-only retrieval originally scored exactly **0.000** and returned the same few
+PMIDs for every question. That was first diagnosed as embedding hubness. It was
+actually an indexing bug: FAISS `search` returns scores sorted best first, together
+with a separate array of document ids. The code kept only the sorted scores and used
+them as if element *i* belonged to document *i*, so the "ranking" was simply the first
+documents in the corpus file, whatever the query said.
 
-| # | Approach | Result |
-|---|---|---|
-| 1 | L2-normalization audit | Not the bug — both query and doc embeddings verified as exact unit vectors |
-| 2 | `IndexFlatIP` → `IndexFlatL2` | Mathematically proven and empirically confirmed identical rankings for normalized vectors — not a real candidate |
-| 3 | Query expansion (LLM synonyms, averaged embedding) | Broke the "identical top-5" pattern but only reached 0.024 recall — not enough |
-| 4 | Hub-frequency suppression (penalize frequent docs) | **0.000** — the candidate *pool itself* was degenerate (same ~10 docs for every probe query); no amount of reordering fixes a pool that never contained the right answer |
-| 5 | Mean-centering (subtract corpus centroid, renormalize) | No change — hub domination isn't a simple directional bias a linear shift can fix |
+`backend/tests/test_retrieval.py` reproduces it with a small stub encoder. On the old
+code every query returns the same documents; on the fixed code each query returns the
+document that matches it.
 
-Two model swaps were also tried and reverted:
+What this changes:
 
-- **NeuML/pubmedbert-base-embeddings** (domain-specific model): same dense hubness
-  failure pattern, and dragged hybrid fusion *below* BM25-alone on a coverage subset
-- **Sentence-level chunking** (index chunks instead of whole abstracts): statistically
-  identical Recall@5 to whole-abstract indexing on a same-subset comparison — kept
-  anyway (see `retrieval.py`) since it's architecturally sound and directly relevant
-  once a better embedding model is found, but it isn't what closed the recall gap
+- Hybrid fusion was blending real BM25 scores with a meaningless dense vector, so the
+  old hybrid and hybrid + rerank numbers were measured under that noise.
+- The earlier experiments (L2 index, query expansion, hub-frequency suppression,
+  mean-centering, the `pubmedbert-base-embeddings` swap, sentence-level chunking) were
+  all run on top of the bug. Their conclusions should be treated as unproven and
+  repeated now that dense retrieval works. Sentence-level chunking is not in the
+  current code; the index holds one vector per abstract.
+- The cross-encoder rerank stage is still a sound final step. How much it adds on top
+  of a working dense leg is what the re-run will show.
+- Cached embeddings are unaffected: the bug was in scoring, not in how documents were
+  embedded, so `data/index_cache/` does not need to be rebuilt.
 
-**What actually worked:** a cross-encoder reranking stage on top of hybrid fusion.
-BM25's candidate pool isn't hub-corrupted, so it reliably contains the right document
-even when dense doesn't help find it; the reranker then scores (query, doc) pairs
-jointly instead of via a shared embedding space, so it's structurally immune to
-hubness. Dense retrieval is kept as a weak auxiliary signal inside fusion — never
-trusted standalone.
-
-**Still open:** the underlying dense embedding model itself hasn't been fixed, only
-worked around. A properly fine-tuned domain-specific embedding model (contrastive
-training on this corpus) is the likely real fix, but is out of scope for a config
-swap or index change.
+**Next, once the eval is re-run:** compare weighted vs. RRF fusion, then try a
+stronger embedding model through `EMBEDDING_MODEL_ID` (with `EMBEDDING_QUERY_PREFIX` /
+`EMBEDDING_DOC_PREFIX` for models such as e5 or bge) and compare on the same harness.
 
 ## Project structure
 
@@ -135,7 +134,8 @@ healthlens/
 ├── backend/
 │   ├── main.py                 # FastAPI app: routes, auth, rate limiting, SSE
 │   ├── config.py                # pydantic-settings, single source of env config
-│   ├── retrieval.py             # chunking, BM25 + dense + FAISS, cross-encoder rerank
+│   ├── retrieval.py             # BM25 + dense + FAISS, score fusion, cross-encoder rerank
+│   ├── grounding.py             # citation checks and abstract snippets
 │   ├── query_decomposition.py   # LLM-driven sub-query splitting + merge
 │   ├── llm.py                    # Groq calls (streaming + non-streaming)
 │   ├── cache.py                  # TTL/LRU query cache
@@ -146,7 +146,8 @@ healthlens/
 │   ├── ingest.py                 # live PubMed fetch fallback (no local corpus)
 │   ├── index_pubmed.py           # one-time bulk corpus indexer
 │   ├── eval/
-│   │   ├── eval_harness.py
+│   │   ├── eval_harness.py      # retrieval metrics per mode
+│   │   ├── answer_eval.py       # answer grounding + optional LLM judge
 │   │   ├── benchmark.json        # 50 questions with ground-truth PMIDs
 │   │   └── results.json
 │   ├── tests/                    # pytest suite
@@ -159,12 +160,16 @@ healthlens/
 │   └── requirements-dev.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx                # main UI, SSE consumer, feedback buttons
+│   │   ├── App.tsx                # main UI and state
+│   │   ├── api.ts                 # SSE streaming client, feedback call
+│   │   ├── history.ts             # localStorage history
+│   │   ├── components/            # AnswerText, SourceCard, HistoryDrawer, Decor
 │   │   ├── ErrorBoundary.tsx
 │   │   └── main.tsx
 │   ├── Dockerfile
 │   └── nginx.conf
 ├── docker-compose.yml
+├── render.yaml                    # Render Blueprint (API + web app)
 ├── .github/workflows/ci.yml
 └── README.md
 ```
@@ -239,8 +244,12 @@ container. Frontend serves on `:5173` (nginx), backend on `:8000`.
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed frontend origins |
 | `RATE_LIMIT_PER_MINUTE` | `20` | Per-IP limit on `/query` and `/query/stream` |
 | `LOG_LEVEL` | `INFO` | Structured logger level |
-| `EMBEDDING_MODEL_ID` | `sentence-transformers/all-MiniLM-L6-v2` | Dense embedding model — swap requires deleting `data/index_cache/` |
+| `EMBEDDING_MODEL_ID` | `sentence-transformers/all-MiniLM-L6-v2` | Dense embedding model. A new model or document prefix gets its own cache entry automatically |
+| `EMBEDDING_QUERY_PREFIX` / `EMBEDDING_DOC_PREFIX` | empty | Instruction prefixes for models that need them (e5: `query: ` / `passage: `) |
 | `RERANKER_MODEL_ID` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker model |
+| `FUSION_METHOD` | `weighted` | `weighted` (min-max blend) or `rrf` (reciprocal rank fusion) |
+| `DENSE_WEIGHT` | `0.5` | Dense share of the weighted blend |
+| `RERANK_POOL_SIZE` | `25` | Candidates passed from fusion to the cross-encoder |
 
 **Frontend** (`frontend/.env`, see `frontend/.env.example`):
 
@@ -264,7 +273,11 @@ rate-limited per IP. `/health/*` and `/metrics` are unauthenticated.
 {
   "query_id": "b7e2...",
   "answer": "...",
-  "sources": [{ "title": "...", "pmid": "12345678" }],
+  "sources": [{ "title": "...", "pmid": "12345678", "snippet": "First sentences of the abstract..." }],
+  "grounding": {
+    "cited": [1, 2], "invalid": [], "claim_sentences": 4,
+    "cited_sentences": 4, "coverage": 1.0, "grounded": true
+  },
   "flagged": false,
   "warning": null
 }
@@ -288,9 +301,17 @@ data: {"text": " latest"}
 
 ...
 
+event: grounding
+data: {"cited": [1, 2], "invalid": [], "coverage": 1.0, "grounded": true, ...}
+
 event: done
 data: {}
 ```
+
+`grounding` has the same shape as in the non-streaming response. `invalid` lists
+citation numbers that do not match any retrieved source; `coverage` is the share of
+factual sentences that carry a citation. It checks the answer's structure, not whether
+each claim is actually true, so the sources still need to be read.
 
 A flagged (guardrail-blocked) question sends `event: flagged` with `{"warning": "..."}`
 instead of `sources`/`token`/`done`. Failures send `event: error` with `{"detail": "..."}`.
@@ -312,7 +333,34 @@ back to live PubMed fetch). Readiness returns `503` when not ready.
 ### `GET /metrics`
 
 Prometheus exposition format: `request_latency_seconds`, `requests_total`,
-`cache_hits_total`, `groq_tokens_used_total`, `retrieval_recall_proxy`.
+`cache_hits_total`, `groq_tokens_used_total`, `answers_total` (labelled by `grounded`),
+`retrieval_recall_proxy`.
+
+## Deploy
+
+`render.yaml` is a [Render Blueprint](https://render.com/docs/blueprint-spec) with two
+services: `healthlens-api` (the Docker backend) and `healthlens-web` (the static
+frontend).
+
+1. Push the repo to GitHub.
+2. In Render, choose **New > Blueprint** and select the repo.
+3. Fill in the prompted values:
+   - `GROQ_API_KEY`: your Groq key.
+   - `HEALTHLENS_API_KEY` and `VITE_HEALTHLENS_API_KEY`: the same value in both places.
+   - `CORS_ORIGINS`: the web app's URL.
+   - `VITE_API_URL`: the API's URL.
+4. If a URL was not known when you created the Blueprint, set it afterwards in the
+   service's environment settings and redeploy. `VITE_*` values are baked in at build
+   time, so the web app must be rebuilt after changing them.
+
+Notes:
+
+- The backend loads two models and needs a 2 GB plan (`1c-2g`); a 512 MB plan will not fit.
+- The 200k-abstract corpus is gitignored, so a deployed backend runs in live-PubMed
+  fallback mode (a PubMed fetch per question). Serving the full corpus needs the data
+  and index cache on a persistent disk.
+- `/metrics` has no auth. Restrict it at the network layer if the service is public.
+- The Docker image listens on `$PORT` (default `8000`).
 
 ## CI/CD
 

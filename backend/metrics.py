@@ -11,6 +11,11 @@ cache_hits_total = Counter("cache_hits_total", "Query cache hits on /api/v1/quer
 groq_tokens_used_total = Counter(
     "groq_tokens_used_total", "Total Groq tokens consumed", ["kind"]  # kind: prompt|completion
 )
+answers_total = Counter(
+    "answers_total",
+    "Generated answers, by whether every citation was valid and factual sentences were cited",
+    ["grounded"],
+)
 # Not a real recall metric (that needs ground truth, which isn't available at
 # request time) — a cheap proxy for "did retrieval return a full top-k or did
 # it come up short," e.g. from a sparse corpus or an over-narrow query.

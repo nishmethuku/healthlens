@@ -23,16 +23,11 @@ INDEX_CACHE_DIR = Path(__file__).parent / "data" / "index_cache"
 _corpus_index: "CorpusIndex | None" = None
 _corpus_checked: bool = False
 
-# Swapping to a domain-adapted model (e.g. a PubMedBERT-based sentence encoder)
-# is a config change via EMBEDDING_MODEL_ID in .env, not a code change — the
-# corpus index cache key includes this value so it invalidates automatically.
+# Swapping the embedding model is a config change via EMBEDDING_MODEL_ID in
+# .env, not a code change — the corpus index cache key includes this value (and
+# the document prefix) so it invalidates automatically. Models that expect
+# instruction prefixes (e5, bge) set EMBEDDING_QUERY_PREFIX / EMBEDDING_DOC_PREFIX.
 EMBEDDING_MODEL_ID = get_settings().embedding_model_id
-
-# Candidates pulled from hybrid fusion before the cross-encoder reranks them down
-# to top_k. Wider than top_k because the dense leg is prone to "hubness" — a
-# handful of generic-sounding abstracts scoring deceptively high cosine
-# similarity against almost any query (see rerank() docstring).
-RERANK_CANDIDATE_POOL = 25
 
 _model: SentenceTransformer | None = None
 _reranker: CrossEncoder | None = None
@@ -169,7 +164,11 @@ def _embedding_cache_paths(abstracts: list[Abstract], cache_dir: Path) -> tuple[
     stale vectors."""
     import hashlib
 
-    fingerprint = f"{len(abstracts)}:{abstracts[0]['pmid']}:{abstracts[-1]['pmid']}:{EMBEDDING_MODEL_ID}"
+    doc_prefix = get_settings().embedding_doc_prefix
+    fingerprint = (
+        f"{len(abstracts)}:{abstracts[0]['pmid']}:{abstracts[-1]['pmid']}:"
+        f"{EMBEDDING_MODEL_ID}:{doc_prefix}"
+    )
     digest = hashlib.sha1(fingerprint.encode()).hexdigest()[:16]
     return cache_dir / f"embs_{digest}.npy", cache_dir / f"faiss_{digest}.index"
 
@@ -213,7 +212,10 @@ class CorpusIndex:
                     logger.warning("cached index unreadable, rebuilding", exc_info=True)
 
         model = _get_model()
-        doc_embs = model.encode(self.corpus, normalize_embeddings=True).astype(np.float32)
+        doc_prefix = get_settings().embedding_doc_prefix
+        doc_embs = model.encode(
+            [doc_prefix + doc for doc in self.corpus], normalize_embeddings=True
+        ).astype(np.float32)
         dim = doc_embs.shape[1]
         faiss_index = faiss.IndexFlatIP(dim)
         faiss_index.add(doc_embs)
@@ -241,13 +243,13 @@ class CorpusIndex:
         top_k: int = 5,
         mode: RetrievalMode = "hybrid",
         rerank: bool = False,
+        fusion: str | None = None,
     ) -> list[RankedAbstract]:
         if rerank and mode == "hybrid":
-            candidates = _retrieve_from_index(
-                self, query, max(top_k * 5, RERANK_CANDIDATE_POOL), mode
-            )
+            pool = max(top_k * 5, get_settings().rerank_pool_size)
+            candidates = _retrieve_from_index(self, query, pool, mode, fusion)
             return rerank_candidates(query, candidates, top_k)
-        return _retrieve_from_index(self, query, top_k, mode)
+        return _retrieve_from_index(self, query, top_k, mode, fusion)
 
 
 def _rank_abstracts(
@@ -270,6 +272,7 @@ def _retrieve_from_index(
     query: str,
     top_k: int,
     mode: RetrievalMode,
+    fusion: str | None = None,
 ) -> list[RankedAbstract]:
     abstracts = corpus_index.abstracts
     if not abstracts:
@@ -285,11 +288,7 @@ def _retrieve_from_index(
         )
         return _rank_abstracts(abstracts, scores, top_k)
 
-    model = _get_model()
-    query_emb = model.encode([query], normalize_embeddings=True).astype(np.float32)
-    assert corpus_index.faiss_index is not None
-    dense_scores, _ = corpus_index.faiss_index.search(query_emb, len(abstracts))
-    dense_scores = dense_scores[0].astype(np.float32)
+    dense_scores = _dense_scores(corpus_index, query)
 
     if mode == "dense":
         return _rank_abstracts(abstracts, dense_scores, top_k)
@@ -298,8 +297,67 @@ def _retrieve_from_index(
     bm25_scores = np.array(
         corpus_index.bm25.get_scores(_tokenize(query)), dtype=np.float32
     )
-    combined = 0.5 * _normalize(bm25_scores) + 0.5 * _normalize(dense_scores)
+    settings = get_settings()
+    combined = _fuse(
+        bm25_scores,
+        dense_scores,
+        method=fusion or settings.fusion_method,
+        dense_weight=settings.dense_weight,
+    )
     return _rank_abstracts(abstracts, combined, top_k)
+
+
+def _dense_scores(corpus_index: CorpusIndex, query: str) -> np.ndarray:
+    """Cosine similarity of the query against every document, aligned to
+    corpus order (element i belongs to abstracts[i]).
+
+    FAISS returns (scores, ids) with scores sorted best-first, so the ids must
+    be used to scatter scores back to document positions. An earlier version
+    kept only the sorted scores and treated them as if they were already in
+    corpus order, which made dense retrieval return the first few corpus
+    documents for every query regardless of its content.
+    """
+    assert corpus_index.faiss_index is not None
+    model = _get_model()
+    query_emb = model.encode(
+        [get_settings().embedding_query_prefix + query], normalize_embeddings=True
+    ).astype(np.float32)
+    n = len(corpus_index.abstracts)
+    sorted_scores, doc_ids = corpus_index.faiss_index.search(query_emb, n)
+    scores = np.full(n, -1.0, dtype=np.float32)
+    valid = doc_ids[0] >= 0
+    scores[doc_ids[0][valid]] = sorted_scores[0][valid]
+    return scores
+
+
+def _fuse(
+    bm25_scores: np.ndarray,
+    dense_scores: np.ndarray,
+    method: str = "weighted",
+    dense_weight: float = 0.5,
+) -> np.ndarray:
+    """Combine the lexical and dense score vectors into one ranking signal.
+
+    "weighted": min-max normalize each leg, then a convex combination.
+    "rrf": reciprocal rank fusion, which ignores score magnitudes and only
+    uses each leg's ranking, so the two legs' different score scales cannot
+    let one dominate.
+    """
+    if method == "rrf":
+        return _reciprocal_rank_fusion([bm25_scores, dense_scores])
+    return (1 - dense_weight) * _normalize(bm25_scores) + dense_weight * _normalize(dense_scores)
+
+
+def _reciprocal_rank_fusion(
+    score_arrays: list[np.ndarray], k: int = 60, depth: int = 1000
+) -> np.ndarray:
+    fused = np.zeros(len(score_arrays[0]), dtype=np.float32)
+    for scores in score_arrays:
+        d = min(depth, len(scores))
+        top = np.argpartition(scores, -d)[-d:]
+        top = top[np.argsort(scores[top])[::-1]]
+        fused[top] += 1.0 / (k + np.arange(1, d + 1, dtype=np.float32))
+    return fused
 
 
 def _get_reranker() -> CrossEncoder:
