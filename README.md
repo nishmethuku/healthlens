@@ -240,7 +240,7 @@ container. Frontend serves on `:5173` (nginx), backend on `:8000`.
 |---|---|---|
 | `GROQ_API_KEY` | — | Required. Groq API key for answer generation |
 | `HEALTHLENS_API_KEY` | — | Required. Clients must send this as `X-API-Key` |
-| `NCBI_API_KEY` | — | Optional. Raises NCBI E-utilities rate limits for `index_pubmed.py` |
+| `NCBI_API_KEY` | — | Optional. Raises NCBI E-utilities rate limits for `index_pubmed.py` and the live PubMed fallback |
 | `ENVIRONMENT` | `development` | `production` enables stricter behavior via `settings.is_production` |
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed frontend origins |
 | `RATE_LIMIT_PER_MINUTE` | `20` | Per-IP limit on `/query` and `/query/stream` |
@@ -358,7 +358,8 @@ Notes:
 
 - The backend loads two models and needs a 2 GB plan (`1c-2g`); a 512 MB plan will not fit.
 - The 200k-abstract corpus is gitignored, so a deployed backend runs in live-PubMed
-  fallback mode (a PubMed fetch per question). Serving the full corpus needs the data
+  fallback mode (a PubMed fetch per question; if the question finds nothing, it is
+  retried with just its content words). Setting `NCBI_API_KEY` raises PubMed's rate limit. Serving the full corpus needs the data
   and index cache on a persistent disk.
 - `/metrics` has no auth. Restrict it at the network layer if the service is public.
 - The Docker image listens on `$PORT` (default `8000`).
