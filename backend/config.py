@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     environment: str = Field(default="development", alias="ENVIRONMENT")
 
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    # Groq retired llama-3.3-70b-versatile in Aug 2026; gpt-oss-120b is its
+    # production replacement. Override with GROQ_MODEL if Groq changes it again.
+    groq_model: str = Field(default="openai/gpt-oss-120b", alias="GROQ_MODEL")
     ncbi_api_key: str | None = Field(default=None, alias="NCBI_API_KEY")
 
     # Fail-closed: if unset, every request is rejected rather than silently

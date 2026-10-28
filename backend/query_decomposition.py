@@ -10,7 +10,7 @@ from retrieval import RankedAbstract, rerank_candidates
 if TYPE_CHECKING:
     from retrieval import CorpusIndex
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = get_settings().groq_model
 SUB_QUERY_TOP_K = 10
 FINAL_TOP_K = 5
 

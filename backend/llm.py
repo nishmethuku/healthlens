@@ -6,7 +6,7 @@ from groq import Groq
 from config import get_settings
 from retrieval import RankedAbstract
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = get_settings().groq_model
 # Low temperature: this is a citation-bound answer, not creative writing.
 ANSWER_TEMPERATURE = 0.2
 
