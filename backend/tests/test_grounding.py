@@ -54,3 +54,14 @@ def test_snippet_keeps_short_text_and_cuts_long_text_at_a_boundary():
     snippet = make_snippet(long_text, limit=40)
     assert snippet == "First sentence is here."
     assert len(make_snippet("word " * 200, limit=60)) <= 61
+
+
+def test_fullwidth_bracket_citations_are_normalized_so_they_count():
+    from llm import normalize_brackets
+
+    raw = "Statins lower LDL in adults【1】. They reduce events［2］."
+    text = normalize_brackets(raw)
+    assert text == "Statins lower LDL in adults[1]. They reduce events[2]."
+    report = analyze_citations(text, 2)
+    assert report["cited"] == [1, 2]
+    assert report["coverage"] == 1.0

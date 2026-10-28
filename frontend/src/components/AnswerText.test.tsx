@@ -41,3 +41,10 @@ describe("bold markers", () => {
     expect(container.textContent).not.toContain("**");
   });
 });
+
+describe("fullwidth citation brackets", () => {
+  it("turns 【1】 into a clickable citation", () => {
+    render(<AnswerText text={"Statins help【1】."} sourceCount={1} onCite={() => {}} />);
+    expect(screen.getByRole("button", { name: "Go to source 1" })).toBeTruthy();
+  });
+});
