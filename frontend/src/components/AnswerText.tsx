@@ -10,6 +10,19 @@ interface Props {
   onCite: (sourceNumber: number) => void;
 }
 
+// Turns **bold** markers into <strong>; the model sometimes writes them.
+function withBold(text: string, keyBase: number): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
+      <strong key={`${keyBase}-${i}`} className="font-semibold text-white">
+        {part.slice(2, -2)}
+      </strong>
+    ) : (
+      part
+    ),
+  );
+}
+
 // Renders the answer with each [n] marker turned into a button that jumps to
 // the matching source card. A marker pointing at a source that does not exist
 // is shown struck through so a bad citation is visible instead of trusted.
@@ -20,7 +33,7 @@ export function AnswerText({ text, sourceCount, onCite }: Props) {
 
   for (const match of text.matchAll(CITATION_GROUP)) {
     const start = match.index ?? 0;
-    if (start > last) nodes.push(text.slice(last, start));
+    if (start > last) nodes.push(...withBold(text.slice(last, start), key++));
 
     for (const raw of match[1].split(",")) {
       const n = Number(raw.trim());
@@ -50,7 +63,7 @@ export function AnswerText({ text, sourceCount, onCite }: Props) {
     }
     last = start + match[0].length;
   }
-  if (last < text.length) nodes.push(text.slice(last));
+  if (last < text.length) nodes.push(...withBold(text.slice(last), key));
 
   return <>{nodes}</>;
 }
