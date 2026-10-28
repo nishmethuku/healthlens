@@ -201,6 +201,8 @@ def test_app_refuses_to_start_in_production_with_unsafe_config(monkeypatch):
 
     monkeypatch.setattr(main.settings, "environment", "production")
     monkeypatch.setattr(main.settings, "healthlens_api_key", None)
-    with pytest.raises(RuntimeError, match="unsafe production configuration"):
-        with TestClient(main.app):
-            pass
+    with (
+        pytest.raises(RuntimeError, match="unsafe production configuration"),
+        TestClient(main.app),
+    ):
+        pass
