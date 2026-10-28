@@ -84,3 +84,29 @@ def test_weighted_fusion_respects_dense_weight():
     dense = np.array([0.0, 1.0, 0.0], dtype=np.float32)
     assert int(np.argmax(_fuse(bm25, dense, "weighted", dense_weight=0.2))) == 0
     assert int(np.argmax(_fuse(bm25, dense, "weighted", dense_weight=0.8))) == 1
+
+
+def test_lite_mode_uses_keywords_only_and_loads_no_models(monkeypatch):
+    from config import get_settings
+
+    monkeypatch.setenv("LITE_MODE", "true")
+    get_settings.cache_clear()
+
+    def boom():
+        raise AssertionError("lite mode must not load an embedding model")
+
+    monkeypatch.setattr(retrieval, "_get_model", boom)
+    monkeypatch.setattr(retrieval, "_get_reranker", boom)
+    docs = [
+        {"title": "Metformin for diabetes", "abstract": "Metformin lowers glucose in type 2 diabetes.", "pmid": "1"},
+        {"title": "Knee surgery", "abstract": "Recovery after knee arthroplasty.", "pmid": "2"},
+        {"title": "Asthma inhalers", "abstract": "Inhaled steroids reduce asthma attacks.", "pmid": "3"},
+        {"title": "Sleep and memory", "abstract": "Sleep supports memory consolidation.", "pmid": "4"},
+    ]
+    try:
+        out = retrieval.hybrid_retrieve("metformin diabetes", docs, top_k=1)
+        assert out[0]["pmid"] == "1"
+        retrieval.warm_reranker()
+    finally:
+        monkeypatch.delenv("LITE_MODE")
+        get_settings.cache_clear()

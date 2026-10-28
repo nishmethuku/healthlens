@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     environment: str = Field(default="development", alias="ENVIRONMENT")
 
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    # Groq retired llama-3.3-70b-versatile in Aug 2026; gpt-oss-120b is its
+    # production replacement. Override with GROQ_MODEL if Groq changes it again.
+    groq_model: str = Field(default="openai/gpt-oss-120b", alias="GROQ_MODEL")
     ncbi_api_key: str | None = Field(default=None, alias="NCBI_API_KEY")
 
     # Fail-closed: if unset, every request is rejected rather than silently
@@ -41,6 +44,10 @@ class Settings(BaseSettings):
     dense_weight: float = Field(default=0.5, alias="DENSE_WEIGHT")
     # Candidates taken from fusion before the cross-encoder reranks them down to top_k.
     rerank_pool_size: int = Field(default=25, alias="RERANK_POOL_SIZE")
+
+    # Keyword-only retrieval with no embedding model or reranker. Fits in the
+    # 512 MB of a free host; answer quality is a bit lower than the full pipeline.
+    lite_mode: bool = Field(default=False, alias="LITE_MODE")
 
     @property
     def cors_origin_list(self) -> list[str]:

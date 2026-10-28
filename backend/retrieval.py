@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import math
@@ -5,22 +7,24 @@ import os
 import re
 from collections import Counter
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import faiss
 import numpy as np
 from scipy import sparse
-from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from config import get_settings
 from ingest import Abstract
+
+if TYPE_CHECKING:  # heavy imports stay lazy so lite mode never loads torch
+    from sentence_transformers import CrossEncoder, SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
 CORPUS_PATH = Path(__file__).parent / "data" / "pubmed_abstracts.jsonl"
 INDEX_CACHE_DIR = Path(__file__).parent / "data" / "index_cache"
 
-_corpus_index: "CorpusIndex | None" = None
+_corpus_index: CorpusIndex | None = None
 _corpus_checked: bool = False
 
 # Swapping the embedding model is a config change via EMBEDDING_MODEL_ID in
@@ -61,6 +65,8 @@ def _local_snapshot_path(repo_id: str) -> Path | None:
 def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
+        from sentence_transformers import SentenceTransformer
+
         local_path = _local_snapshot_path(EMBEDDING_MODEL_ID)
         if local_path is not None:
             _model = SentenceTransformer(str(local_path), local_files_only=True)
@@ -190,7 +196,7 @@ class CorpusIndex:
         self.bm25 = _FastBM25(self.tokenized) if abstracts else None
         self.doc_embs: np.ndarray | None = None
         self.faiss_index: faiss.IndexFlatIP | None = None
-        if abstracts:
+        if abstracts and not get_settings().lite_mode:
             self.doc_embs, self.faiss_index = self._load_or_build_dense(abstracts, cache_dir)
 
     def _load_or_build_dense(
@@ -245,6 +251,9 @@ class CorpusIndex:
         rerank: bool = False,
         fusion: str | None = None,
     ) -> list[RankedAbstract]:
+        if get_settings().lite_mode:
+            # Keyword-only search: no embedding model or reranker is loaded.
+            mode, rerank = "bm25", False
         if rerank and mode == "hybrid":
             pool = max(top_k * 5, get_settings().rerank_pool_size)
             candidates = _retrieve_from_index(self, query, pool, mode, fusion)
@@ -381,6 +390,8 @@ def _reciprocal_rank_fusion(
 def _get_reranker() -> CrossEncoder:
     global _reranker
     if _reranker is None:
+        from sentence_transformers import CrossEncoder
+
         settings = get_settings()
         _reranker = CrossEncoder(settings.reranker_model_id)
     return _reranker
@@ -404,6 +415,8 @@ def rerank_candidates(
     """
     if not candidates:
         return []
+    if get_settings().lite_mode:
+        return candidates[:top_k]
     if len(candidates) <= top_k:
         pass  # still worth reranking order even if the pool is small
 
@@ -470,6 +483,8 @@ def get_corpus_index() -> CorpusIndex | None:
 
 
 def warm_reranker() -> None:
+    if get_settings().lite_mode:
+        return
     """Force-load the cross-encoder at startup instead of on the first request,
     so p99 latency doesn't spike for whichever user triggers the cold load."""
     _get_reranker()

@@ -3,7 +3,7 @@
 HealthLens is a full-stack medical Q&A app that answers questions grounded in PubMed
 literature. It runs hybrid retrieval (BM25 + dense embeddings, fused and reranked by
 a cross-encoder) against a local 200k-abstract corpus, optionally decomposes complex
-questions into sub-queries, and generates cited answers via Groq (Llama 3.3 70B) —
+questions into sub-queries, and generates cited answers via Groq (gpt-oss-120b) —
 streamed token-by-token or returned as a single response. Every answer is checked
 for citations that point at sources that were never retrieved.
 
@@ -63,7 +63,7 @@ flowchart TD
         Fusion --> Rerank["Cross-encoder rerank"]
     end
 
-    Rerank --> LLM["Groq llama-3.3-70b<br/>(streamed via SSE or full response)"]
+    Rerank --> LLM["Groq gpt-oss-120b<br/>(streamed via SSE or full response)"]
     LLM --> Check["Citation grounding check"]
     Check --> API
     API --> FE

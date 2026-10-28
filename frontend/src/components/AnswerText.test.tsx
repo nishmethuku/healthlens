@@ -31,3 +31,13 @@ describe("AnswerText", () => {
     expect(container.textContent).toBe("Before 1 after.");
   });
 });
+
+describe("bold markers", () => {
+  it("renders **text** as bold without showing asterisks", () => {
+    const { container } = render(
+      <AnswerText text="**Answer:** fasting helps [1]." sourceCount={1} onCite={() => {}} />,
+    );
+    expect(container.querySelector("strong")?.textContent).toBe("Answer:");
+    expect(container.textContent).not.toContain("**");
+  });
+});
