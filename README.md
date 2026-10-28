@@ -74,28 +74,44 @@ flowchart TD
 
 ## Eval results
 
-Evaluated on **50 medical questions** against the full **200,000-abstract** corpus
-(Recall@5, MRR, Precision@5, top-5 retrieval):
+Measured on **50 medical questions** against the full **200,000-abstract** corpus, with
+the dense retrieval bug fixed (top-5 retrieval, scored against `benchmark.json`):
 
 | Mode | Recall@5 | MRR | Precision@5 |
 |---|---|---|---|
 | BM25-only | 0.060 | 0.121 | 0.060 |
-| Dense-only (measured with the bug below) | 0.000 | 0.000 | 0.000 |
-| Hybrid (measured with the bug below) | 0.092 | 0.190 | 0.092 |
-| Hybrid + cross-encoder rerank (measured with the bug below) | 0.120 | 0.266 | 0.120 |
+| Dense-only | 0.048 | 0.125 | 0.048 |
+| Hybrid (weighted fusion) | 0.060 | 0.119 | 0.060 |
+| Hybrid (reciprocal rank fusion) | 0.056 | 0.127 | 0.056 |
+| Hybrid + cross-encoder rerank | 0.068 | 0.170 | 0.068 |
+| Hybrid (RRF) + cross-encoder rerank | 0.068 | 0.158 | 0.068 |
 
-**Only the BM25 row is trustworthy.** The other three were measured before the dense
-retrieval bug described in the next section was fixed, so they need to be re-run:
+**These numbers do not show how good the search is, and they should not be quoted as a
+quality claim.** Every benchmark question lists exactly five "correct" papers, and all 248
+of them are in the corpus, but the list is a poor yardstick. Looking at three questions
+by hand, the papers the search returned were clearly on topic (for example, five papers
+about transcatheter aortic valve replacement in elderly patients), while several of the
+"correct" papers were not (a case report on Heyde syndrome for a valve question). The old,
+buggy hybrid run also scored higher on this benchmark than the fixed one, which is what
+you would expect if the labels came from the old system. Differences between modes here
+are about one paper across 250 slots, which is noise.
+
+So the reliable result is narrower: fixing the dense bug made dense retrieval return
+different, relevant papers per question, and the cross-encoder rerank gave the best MRR
+(0.170 versus 0.121 for BM25).
+
+For a trustworthy comparison, grade the papers that are actually returned:
 
 ```bash
-cd backend && python eval/eval_harness.py            # all modes
-python eval/eval_harness.py --modes dense hybrid hybrid_rrf hybrid_rerank hybrid_rrf_rerank
+cd backend && python eval/judged_eval.py       # an LLM grades every returned paper
+python eval/eval_harness.py                    # the fixed-label benchmark above
 ```
 
-The harness also compares weighted fusion against reciprocal rank fusion
-(`hybrid_rrf*` modes). `python eval/answer_eval.py --limit 10 [--judge]` measures
-answer quality instead of retrieval: how often citations are valid and how many
-factual sentences are cited, plus an optional LLM judge for claim support.
+`judged_eval.py` reports the share of returned papers that are relevant (strict and
+lenient) for each mode and writes `eval/judged_sample.csv`, 30 graded papers for a human
+to check, because an LLM judge can be wrong. `python eval/answer_eval.py --limit 10
+[--judge]` measures answer quality instead of retrieval: how often citations are valid
+and how many factual sentences are cited, plus an optional LLM judge for claim support.
 
 ## Design decisions: the dense retrieval bug
 
@@ -124,7 +140,7 @@ What this changes:
 - Cached embeddings are unaffected: the bug was in scoring, not in how documents were
   embedded, so `data/index_cache/` does not need to be rebuilt.
 
-**Next, once the eval is re-run:** compare weighted vs. RRF fusion, then try a
+**Next:** run `judged_eval.py`, then compare weighted vs. RRF fusion, then try a
 stronger embedding model through `EMBEDDING_MODEL_ID` (with `EMBEDDING_QUERY_PREFIX` /
 `EMBEDDING_DOC_PREFIX` for models such as e5 or bge) and compare on the same harness.
 
@@ -147,7 +163,8 @@ healthlens/
 │   ├── ingest.py                 # live PubMed fetch fallback (no local corpus)
 │   ├── index_pubmed.py           # one-time bulk corpus indexer
 │   ├── eval/
-│   │   ├── eval_harness.py      # retrieval metrics per mode
+│   │   ├── eval_harness.py      # retrieval metrics per mode (fixed labels)
+│   │   ├── judged_eval.py       # LLM-graded relevance of returned papers
 │   │   ├── answer_eval.py       # answer grounding + optional LLM judge
 │   │   ├── benchmark.json        # 50 questions with ground-truth PMIDs
 │   │   └── results.json
