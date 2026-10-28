@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     # Comma-separated origins, e.g. "https://healthlens.app,https://www.healthlens.app"
     cors_origins: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
 
+    # How many reverse proxies you control in front of the app (for example 1 behind
+    # a single load balancer). The client IP for rate limiting is read from that many
+    # entries from the right of X-Forwarded-For. Leave 0 unless you have verified the
+    # hop count, because a wrong value lets clients pick their own rate-limit bucket.
+    trusted_proxy_hops: int = Field(default=0, ge=0, le=5, alias="TRUSTED_PROXY_HOPS")
+
+    # Bearer token required for /metrics in production. If unset, /metrics is closed there.
+    metrics_token: str | None = Field(default=None, alias="METRICS_TOKEN")
+
     rate_limit_per_minute: int = Field(default=20, alias="RATE_LIMIT_PER_MINUTE")
 
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

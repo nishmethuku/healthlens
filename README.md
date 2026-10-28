@@ -72,6 +72,10 @@ flowchart TD
     API -.-> FeedbackLog[("backend/data/feedback.jsonl")]
 ```
 
+## Security
+
+Threat model, defenses, tests, and known gaps are in [SECURITY.md](SECURITY.md).
+
 ## Eval results
 
 Measured on **50 medical questions** against the full **200,000-abstract** corpus, with

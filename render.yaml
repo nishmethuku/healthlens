@@ -25,6 +25,11 @@ services:
       # The web app's public URL, for example https://healthlens-web.onrender.com
       - key: CORS_ORIGINS
         sync: false
+      # Bearer token for /metrics, which is closed in production without it.
+      - key: METRICS_TOKEN
+        sync: false
+      # Leave TRUSTED_PROXY_HOPS unset (0) until you have confirmed how many proxies sit
+      # in front of the app. See SECURITY.md, known gap 3.
 
   - type: web
     runtime: static

@@ -22,12 +22,12 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from starlette.concurrency import iterate_in_threadpool
 
 import cache
 import feedback
 import metrics
+import security
 from config import get_settings
 from grounding import analyze_citations, make_snippet
 from guardrails import check_query
@@ -50,7 +50,11 @@ settings = get_settings()
 configure_logging(settings.log_level)
 logger = logging.getLogger("healthlens")
 
-limiter = Limiter(key_func=get_remote_address)
+def _rate_limit_key(request: Request) -> str:
+    return security.client_ip(request, settings.trusted_proxy_hops)
+
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 
 @asynccontextmanager
@@ -59,6 +63,11 @@ async def lifespan(app: FastAPI):
     first real request doesn't pay embedding-build latency, and so /health/ready
     has something meaningful to report."""
     app.state.startup_complete = False
+    if settings.is_production:
+        problems = security.production_config_problems(settings)
+        if problems:
+            # Refuse to start rather than serve with an unsafe configuration.
+            raise RuntimeError("unsafe production configuration: " + "; ".join(problems))
     try:
         await asyncio.to_thread(get_corpus_index)
         await asyncio.to_thread(warm_reranker)
@@ -76,6 +85,10 @@ app = FastAPI(
         "Not medical advice — see the /query endpoint disclaimer."
     ),
     lifespan=lifespan,
+    # The interactive docs and schema list every route, so keep them off in production.
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -83,7 +96,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
+    allow_credentials=False,  # no cookies are used, so never allow credentialed requests
     allow_methods=["GET", "POST"],
     # X-API-Key is sent by the browser frontend on every query, so it must be
     # allowed or the CORS preflight is rejected before the request is made.
@@ -95,7 +108,7 @@ app.add_middleware(
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
     """Stamp every request with a correlation ID and log latency/outcome."""
-    req_id = request.headers.get("x-request-id", str(uuid.uuid4()))
+    req_id = security.sanitize_request_id(request.headers.get("x-request-id"))
     token = request_id_var.set(req_id)
     start = time.perf_counter()
     try:
@@ -123,6 +136,7 @@ async def request_context_middleware(request: Request, call_next):
         endpoint=request.url.path, status=str(response.status_code)
     ).inc()
     response.headers["x-request-id"] = req_id
+    security.apply_security_headers(response, request.url.path, settings.is_production)
     return response
 
 
@@ -136,8 +150,8 @@ async def verify_api_key(x_api_key: str | None = Header(default=None)) -> None:
     with access to the frontend. A proper fix is per-user auth or a
     backend-for-frontend that holds the real secret server-side.
     """
-    expected = settings.healthlens_api_key
-    if not expected or x_api_key != expected:
+    if not security.constant_time_equals(x_api_key, settings.healthlens_api_key):
+        logger.warning("rejected request: missing or invalid API key")
         raise HTTPException(status_code=401, detail="Missing or invalid API key")
 
 
@@ -194,7 +208,7 @@ def _to_source(item: RankedAbstract) -> Source:
 
 
 class FeedbackRequest(BaseModel):
-    query_id: str
+    query_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
     rating: Literal["up", "down"]
     answer_preview: str = Field(..., max_length=2000)
 
@@ -203,10 +217,11 @@ live_router = APIRouter(tags=["health"])
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics_endpoint():
-    """Prometheus scrape target. No auth: standard practice is to keep this
-    off the public internet at the network/ingress layer, not gate it with
-    the same API key used for cost-bearing LLM calls."""
+async def metrics_endpoint(request: Request):
+    """Prometheus scrape target. Open locally; in production it needs the bearer token
+    in METRICS_TOKEN (closed if unset), separate from the cost-bearing API key."""
+    if not security.metrics_authorized(request.headers.get("authorization"), settings):
+        raise HTTPException(status_code=404, detail="Not found")
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -421,7 +436,8 @@ async def _stream_query_events(question: str, decompose: bool):
     dependencies=[Depends(verify_api_key)],
     responses={401: {"description": "Missing or invalid API key"}},
 )
-async def submit_feedback(req: FeedbackRequest):
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def submit_feedback(request: Request, req: FeedbackRequest):
     await asyncio.to_thread(feedback.append, req.query_id, req.rating, req.answer_preview)
     logger.info("feedback recorded", extra={"query_id": req.query_id, "rating": req.rating})
     return {"status": "ok"}
