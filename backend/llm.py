@@ -20,6 +20,7 @@ SYSTEM_PROMPT = (
     "if any.\n"
     "Every factual sentence must end with a citation such as [1] or [2][3] that "
     "matches a numbered abstract. Cite only numbers that appear in the list. "
+    "Write citations with plain square brackets like [1], never other bracket characters. "
     "If the abstracts disagree, say so and cite both sides. "
     "If the abstracts do not support an answer, say that plainly instead of guessing.\n"
     "End with the single line: This is educational information, not medical advice.\n"
@@ -64,6 +65,16 @@ def _build_messages(question: str, sources: list[RankedAbstract]) -> list[dict[s
     ]
 
 
+_BRACKETS = str.maketrans({"\u3010": "[", "\u3011": "]", "\uff3b": "[", "\uff3d": "]"})
+
+
+def normalize_brackets(text: str) -> str:
+    """Some models write citations as 【1】 or ［1］. Convert them to plain [1] so the
+    citation check and the clickable citation chips recognize them. The mapping is
+    per character, so it is safe to apply to each streamed fragment."""
+    return text.translate(_BRACKETS)
+
+
 def generate_answer(question: str, sources: list[RankedAbstract]) -> LLMResponse:
     """Call Groq with retrieved abstracts; return grounded answer and citation metadata."""
     client = _get_client()
@@ -74,7 +85,7 @@ def generate_answer(question: str, sources: list[RankedAbstract]) -> LLMResponse
         messages=_build_messages(question, sources),
     )
 
-    answer = completion.choices[0].message.content or ""
+    answer = normalize_brackets(completion.choices[0].message.content or "")
     citations = [
         {"index": str(i + 1), "title": s["title"], "pmid": s["pmid"]}
         for i, s in enumerate(sources)
@@ -120,7 +131,7 @@ def stream_answer(
             usage_sink["completion_tokens"] = chunk.usage.completion_tokens
         delta = chunk.choices[0].delta.content
         if delta:
-            yield delta
+            yield normalize_brackets(delta)
 
 
 def _build_context(sources: list[RankedAbstract]) -> str:

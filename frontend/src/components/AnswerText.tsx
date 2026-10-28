@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 // Matches "[1]", "[2, 3]" and "[1,2,3]" — the same forms the backend's
 // grounding check recognizes.
-const CITATION_GROUP = /\[(\d+(?:\s*,\s*\d+)*)\]/g;
+const CITATION_GROUP = /[[\u3010\uff3b](\d+(?:\s*,\s*\d+)*)[\]\u3011\uff3d]/g;
 
 interface Props {
   text: string;
