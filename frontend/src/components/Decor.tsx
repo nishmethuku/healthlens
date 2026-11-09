@@ -64,7 +64,7 @@ export function Background() {
   );
 }
 
-export function LoadingState() {
+export function LoadingState({ slow = false }: { slow?: boolean }) {
   return (
     <div className="mt-14 space-y-8">
       <div className="flex flex-col items-center gap-5">
@@ -87,6 +87,12 @@ export function LoadingState() {
           <p className="mt-1 text-xs text-white/70">
             Retrieving abstracts · Ranking sources · Generating answer
           </p>
+          {slow && (
+            <p role="status" className="mx-auto mt-3 max-w-sm text-xs leading-relaxed text-white/90">
+              The free server was asleep and is waking up. The first question can take about a
+              minute. Later ones are fast.
+            </p>
+          )}
         </div>
       </div>
 

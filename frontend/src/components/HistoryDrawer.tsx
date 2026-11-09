@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import type { HistoryEntry } from "../history";
 
 interface Props {
@@ -7,14 +8,34 @@ interface Props {
   onSelect: (entry: HistoryEntry) => void;
   onRemove: (id: string) => void;
   onClear: () => void;
+  onExport: () => void;
+  onImport: (file: File) => Promise<boolean>;
 }
 
 function formatWhen(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function HistoryDrawer({ open, entries, onClose, onSelect, onRemove, onClear }: Props) {
+export function HistoryDrawer({
+  open,
+  entries,
+  onClose,
+  onSelect,
+  onRemove,
+  onClear,
+  onExport,
+  onImport,
+}: Props) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
   if (!open) return null;
+
+  async function handleFile(file: File | undefined) {
+    if (!file) return;
+    const ok = await onImport(file);
+    setImportMessage(ok ? "History imported." : "That file is not a HealthLens history export.");
+  }
+
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -79,17 +100,46 @@ export function HistoryDrawer({ open, entries, onClose, onSelect, onRemove, onCl
           )}
         </div>
 
-        {entries.length > 0 && (
-          <div className="border-t border-white/20 px-5 py-4">
+        <div className="space-y-2 border-t border-white/20 px-5 py-4 text-xs">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {entries.length > 0 && (
+              <button type="button" onClick={onExport} className="text-white/85 hover:text-white">
+                Export to a file
+              </button>
+            )}
             <button
               type="button"
-              onClick={onClear}
-              className="text-xs text-white/70 hover:text-red-200"
+              onClick={() => fileRef.current?.click()}
+              className="text-white/85 hover:text-white"
             >
-              Clear all history
+              Import from a file
             </button>
+            {entries.length > 0 && (
+              <button type="button" onClick={onClear} className="text-white/70 hover:text-red-200">
+                Clear all history
+              </button>
+            )}
           </div>
-        )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            aria-label="Import history file"
+            onChange={(e) => {
+              void handleFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+          <p className="text-white/65">
+            Use export and import to move your history to another device.
+          </p>
+          {importMessage && (
+            <p role="status" className="text-white/90">
+              {importMessage}
+            </p>
+          )}
+        </div>
       </aside>
     </div>
   );

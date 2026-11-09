@@ -1,5 +1,5 @@
-import { useRef, useState, type FormEvent } from "react";
-import { sendFeedback, streamQuery, type Grounding, type Source } from "./api";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { sendFeedback, streamQuery, wakeServer, type Grounding, type Source } from "./api";
 import { AnswerText } from "./components/AnswerText";
 import {
   Background,
@@ -15,8 +15,12 @@ import { HistoryDrawer } from "./components/HistoryDrawer";
 import { SourceCard } from "./components/SourceCard";
 import {
   addEntry,
+  answerWithSources,
   clearHistory,
+  exportHistory,
   loadHistory,
+  mergeImported,
+  parseImport,
   removeEntry,
   type HistoryEntry,
 } from "./history";
@@ -81,7 +85,36 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [highlighted, setHighlighted] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [slow, setSlow] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    void wakeServer();
+  }, []);
+
+  // If nothing has come back after a few seconds, the free server is probably waking up.
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setTimeout(() => setSlow(true), 8000);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
+
+  function downloadHistory() {
+    const blob = new Blob([exportHistory(history)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "healthlens-history.json";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importHistory(file: File): Promise<boolean> {
+    const parsed = parseImport(await file.text());
+    if (!parsed) return false;
+    setHistory(mergeImported(history, parsed));
+    return true;
+  }
 
   function resetResult() {
     setAnswer(null);
@@ -100,6 +133,7 @@ export default function App() {
     if (!q || loading) return;
 
     setQuestion(q);
+    setSlow(false);
     setLoading(true);
     resetResult();
 
@@ -197,7 +231,7 @@ export default function App() {
   async function copyAnswer() {
     if (!answer) return;
     try {
-      await navigator.clipboard.writeText(answer);
+      await navigator.clipboard.writeText(answerWithSources(answer, sources));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -366,7 +400,7 @@ export default function App() {
           </section>
 
           <main>
-            {showSkeleton && <LoadingState />}
+            {showSkeleton && <LoadingState slow={slow} />}
 
             {error && !loading && (
               <div className="glass-strong mt-10 rounded-3xl border-red-200/50 px-6 py-5">
@@ -460,7 +494,7 @@ export default function App() {
                         onClick={() => void copyAnswer()}
                         className="glass-pill ml-auto rounded-full px-4 py-1.5 text-xs text-white transition-colors hover:bg-white/28"
                       >
-                        {copied ? "Copied" : "Copy answer"}
+                        {copied ? "Copied" : "Copy with sources"}
                       </button>
                     </div>
                   )}
@@ -512,7 +546,7 @@ export default function App() {
               education and research only and does not provide diagnosis or treatment. For emergencies
               call 911. If you are in crisis, call or text 988.
             </p>
-            <p className="mt-2 text-white/65">Powered by PubMed · Hybrid retrieval · Groq LLM</p>
+            <p className="mt-2 text-white/65">Powered by PubMed · Groq LLM</p>
           </footer>
         </div>
       </div>
@@ -524,6 +558,8 @@ export default function App() {
         onSelect={openHistoryEntry}
         onRemove={(id) => setHistory((current) => removeEntry(current, id))}
         onClear={() => setHistory(clearHistory())}
+        onExport={downloadHistory}
+        onImport={importHistory}
       />
     </div>
   );
