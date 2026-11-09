@@ -123,3 +123,13 @@ export async function sendFeedback(queryId: string, rating: "up" | "down", answe
     // best-effort — don't surface a feedback-submission failure to the user
   }
 }
+
+// The free host puts the API to sleep when idle. Pinging it on page load starts the
+// wake-up while the person is still typing. Failures are ignored on purpose.
+export async function wakeServer(): Promise<void> {
+  try {
+    await fetch(`${API_URL}/health/live`, { method: "GET" });
+  } catch {
+    // best-effort
+  }
+}

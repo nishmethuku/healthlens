@@ -40,3 +40,36 @@ describe("history", () => {
     expect(loadHistory()).toEqual([]);
   });
 });
+
+import { answerWithSources, exportHistory, mergeImported, parseImport } from "./history";
+
+describe("export, import and copy", () => {
+  const entry = {
+    id: "1",
+    question: "q one",
+    answer: "a [1]",
+    sources: [{ title: "Paper", pmid: "123" }],
+    grounding: null,
+    createdAt: 5,
+  };
+
+  it("round-trips an export", () => {
+    expect(parseImport(exportHistory([entry]))).toEqual([entry]);
+  });
+
+  it("rejects files that are not history", () => {
+    expect(parseImport("not json")).toBeNull();
+    expect(parseImport(JSON.stringify({ entries: [{ foo: 1 }] }))).toBeNull();
+  });
+
+  it("merges without duplicating questions", () => {
+    const other = { ...entry, id: "2", question: "q two", createdAt: 9 };
+    const merged = mergeImported([entry], [entry, other]);
+    expect(merged.map((e) => e.question)).toEqual(["q two", "q one"]);
+  });
+
+  it("adds PubMed links when copying", () => {
+    const text = answerWithSources("Answer [1]", entry.sources);
+    expect(text).toContain("https://pubmed.ncbi.nlm.nih.gov/123/");
+  });
+});
