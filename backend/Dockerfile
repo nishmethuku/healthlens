@@ -1,5 +1,5 @@
 # --- builder: compile deps into a venv, keep build tools out of the final image ---
-FROM python:3.12-slim AS builder
+FROM python:3.15-slim AS builder
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # --- runtime: slim image, non-root user, only the venv + source copied in ---
-FROM python:3.12-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 RUN useradd --create-home --uid 1000 appuser
 WORKDIR /app
